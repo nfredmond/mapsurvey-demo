@@ -36,8 +36,17 @@ RENDER_EXTERNAL_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
 if RENDER_EXTERNAL_HOSTNAME:
     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 
+VERCEL_URL = os.environ.get("VERCEL_URL")
+if VERCEL_URL:
+    ALLOWED_HOSTS.append(VERCEL_URL)
+ALLOWED_HOSTS.append(".vercel.app")
+
 # CSRF trusted origins (build from ALLOWED_HOSTS)
-CSRF_TRUSTED_ORIGINS = [f'https://{host}' for host in ALLOWED_HOSTS if host and host != 'localhost']
+CSRF_TRUSTED_ORIGINS = [
+    f'https://*{host}' if host.startswith(".") else f'https://{host}'
+    for host in ALLOWED_HOSTS
+    if host and host != 'localhost'
+]
 
 # Application definition
 

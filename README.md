@@ -60,18 +60,25 @@ python manage.py seed_sdbike_demo
 
 ## Deployment Notes
 
-This demo is a Dockerized Django/GeoDjango app. Deploy it to a Docker-capable host such as Render, Fly.io, or Railway. Vercel is not a good fit for this repository because it does not run Docker web services, and Mapsurvey needs geospatial system libraries plus a long-running Django process.
+This demo is a Dockerized Django/GeoDjango app. Render, Fly.io, or Railway are still the best fit for the full long-running service. The repo also includes a Vercel serverless entrypoint in `vercel.json` and `mapsurvey/wsgi.py` so GitHub deployments to Vercel route traffic to Django instead of returning a platform 404.
 
-For Render or another Docker host, set:
+On Vercel, run migrations and seed data against Supabase separately before sharing the demo:
+
+```bash
+python manage.py migrate
+python manage.py seed_sdbike_demo
+```
+
+For Vercel, Render, or another host, set:
 
 - `SECRET_KEY`
 - `DEBUG=0`
 - `DJANGO_ALLOWED_HOSTS`
 - `DATABASE_URL`
-- `CELERY_BROKER_URL`
-- `CELERY_RESULT_BACKEND`
 - `MAPBOX_ACCESS_TOKEN` if using Mapbox tiles
 - `DEMO_SURVEY_URL` after seeding, if the landing page CTA should point to a fixed survey URL
+
+Docker hosts should also set `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`.
 
 ## License
 
