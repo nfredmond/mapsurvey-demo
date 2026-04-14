@@ -1,0 +1,608 @@
+{% extends "editor/editor_base.html" %}
+{% load survey_filters %}
+
+{% block page_title %}{{ survey.name }}{% endblock %}
+
+{% block navbar_content %}
+<span class="survey-name">
+    {% if survey.is_draft_copy %}
+        Draft of {{ survey.published_version.name }}
+    {% else %}
+        {{ survey.name }}
+    {% endif %}
+</span>
+
+{% if effective_role == 'owner' and survey.status != 'archived' and not survey.is_draft_copy %}
+<div class="status-dropdown dropdown d-inline">
+    <button class="btn btn-sm btn-{{ survey.status|status_badge_class }} dropdown-toggle status-badge-btn" data-toggle="dropdown">
+        {{ survey.get_status_display }} &middot; v{{ survey.version_number }}
+    </button>
+    <div class="dropdown-menu">
+        {% if survey.status == 'draft' %}
+        <button class="dropdown-item" onclick="doTransition('testing')">Move to Testing</button>
+        <button class="dropdown-item" onclick="doTransition('published')">Publish</button>
+        {% elif survey.status == 'testing' %}
+        <button class="dropdown-item" onclick="showPublishConfirm()">Publish</button>
+        <button class="dropdown-item" onclick="doTransition('draft')">Back to Draft</button>
+        {% elif survey.status == 'published' %}
+        <button class="dropdown-item" onclick="doTransition('closed')">Close Survey</button>
+        {% elif survey.status == 'closed' %}
+        <button class="dropdown-item" onclick="doTransition('published')">Reopen</button>
+        <button class="dropdown-item" onclick="doTransition('archived')">Archive</button>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<span class="badge badge-{{ survey.status|status_badge_class }} ml-2 status-badge-static">{{ survey.get_status_display }} &middot; v{{ survey.version_number }}</span>
+{% endif %}
+
+{% include "editor/partials/_survey_nav_tabs.html" with active_tab="editor" hide_status_badge=True %}
+
+{% if show_draft_actions %}
+<button class="btn btn-sm btn-success ml-2" onclick="checkAndPublishDraft()">
+    <i class="fas fa-upload"></i> Publish Version
+</button>
+<button class="btn btn-sm btn-outline-danger ml-1" data-toggle="modal" data-target="#discardDraftModal">
+    <i class="fas fa-trash"></i> Discard
+</button>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if is_read_only and not survey.is_draft_copy %}
+<div class="alert alert-warning mb-0 rounded-0 text-center" style="font-size:0.85rem;">
+    <i class="fas fa-lock"></i> This survey is <strong>read-only</strong>.
+    {% if draft_copy %}
+    <a href="{% url 'editor_survey_detail' draft_copy.uuid %}" class="ml-2 btn btn-sm btn-outline-dark">Go to draft &rarr;</a>
+    {% elif show_edit_published %}
+    <form method="post" action="{% url 'editor_create_draft' survey.uuid %}" class="d-inline ml-2">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-primary">Create a draft copy</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+<div class="editor-container">
+    <!-- Sidebar expand tab (visible when collapsed) -->
+    <div class="panel-expand-tab" id="sidebar-expand" title="Show sections">
+        <i class="fas fa-chevron-right"></i> Sections
+    </div>
+
+    <!-- Left Sidebar: Sections -->
+    <aside class="editor-sidebar" id="editor-sidebar">
+        <div class="sidebar-header">
+            <span>Sections</span>
+            <button class="panel-toggle" id="sidebar-collapse" title="Hide sidebar">
+                <i class="fas fa-chevron-left"></i>
+            </button>
+        </div>
+        <ul class="section-list" id="sections-list">
+            {% for section in sections %}
+                {% include "editor/partials/section_list_item.html" with is_current=forloop.first %}
+            {% endfor %}
+        </ul>
+        {% if can_edit %}
+        <div class="sidebar-footer">
+            <button class="add-question-btn"
+                    hx-post="{% url 'editor_section_create' survey.uuid %}"
+                    hx-target="#sections-list"
+                    hx-swap="beforeend"
+                    hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+                <i class="fas fa-plus"></i> New Section
+            </button>
+        </div>
+        {% endif %}
+    </aside>
+
+    <!-- Resize handle: sidebar ↔ main -->
+    <div class="resize-handle" id="resize-sidebar"></div>
+
+    <!-- Center Panel: Section Detail + Questions -->
+    <main class="editor-main" id="editor-main">
+        {% if current_section %}
+        <div id="section-content"
+             hx-get="{% url 'editor_section_detail' survey.uuid current_section.id %}"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div style="text-align:center;padding:2rem;color:#9ca3af;">Loading...</div>
+        </div>
+        {% else %}
+        <div style="text-align:center;padding:3rem;color:#9ca3af;">
+            <i class="fas fa-layer-group" style="font-size:2rem;margin-bottom:1rem;display:block;"></i>
+            <p>No sections yet. Create one to get started.</p>
+        </div>
+        {% endif %}
+    </main>
+
+    <!-- Resize handle: main ↔ preview -->
+    <div class="resize-handle" id="resize-preview"></div>
+
+    <!-- Preview expand tab (visible when collapsed) -->
+    <div class="panel-expand-tab" id="preview-expand" title="Show preview">
+        <i class="fas fa-chevron-left"></i> Preview
+    </div>
+
+    <!-- Right Panel: Live Preview -->
+    <aside class="editor-preview" id="editor-preview">
+        <div class="preview-header">
+            <span>Preview</span>
+            {% if survey.available_languages %}
+            <select id="preview-lang" style="border:1px solid var(--border-color);border-radius:4px;padding:2px 6px;font-size:0.75rem;color:#374151;background:#fff;outline:none;text-transform:uppercase;cursor:pointer;">
+                {% for lang in survey.available_languages %}
+                <option value="{{ lang }}">{{ lang }}</option>
+                {% endfor %}
+            </select>
+            {% endif %}
+            <button class="panel-toggle" id="preview-collapse" title="Hide preview">
+                <i class="fas fa-chevron-right"></i>
+            </button>
+        </div>
+        {% if current_section %}
+        <iframe class="preview-frame" id="preview-frame"
+                src="{% url 'editor_section_preview' survey.uuid current_section.name %}{% if survey.available_languages %}?lang={{ survey.available_languages.0 }}{% endif %}">
+        </iframe>
+        {% else %}
+        <div style="padding:2rem;text-align:center;color:#9ca3af;font-size:0.85rem;">
+            Preview will appear here when you add a section.
+        </div>
+        {% endif %}
+    </aside>
+</div>
+
+<!-- Question Form Modal -->
+<div class="modal fade editor-modal" id="questionModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div id="questionModalBody">
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Map Picker Modal -->
+<div class="modal fade editor-modal" id="mapPickerModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div id="mapPickerModalBody">
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if show_draft_actions %}
+<!-- Publish Version Modal -->
+<div class="modal fade editor-modal" id="publishDraftModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Publish Version</h5>
+                <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body" id="publishDraftModalBody">
+                <p>Publish this draft as v{{ survey.published_version.version_number|add:1 }}?</p>
+                <p class="text-muted">Active respondents will continue on the current version.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" onclick="doPublishDraft(false)">Publish</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Publish with Issues Modal -->
+<div class="modal fade editor-modal" id="publishDraftIssuesModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-warning">Compatibility Issues Found</h5>
+                <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <p>The following breaking changes were detected:</p>
+                <ul id="compatibilityIssuesList"></ul>
+                <p class="text-muted">Force-publishing will preserve old answers in the archived version.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-warning" onclick="doPublishDraft(true)">Force Publish</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Discard Draft Modal -->
+<div class="modal fade editor-modal" id="discardDraftModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Discard Draft</h5>
+                <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <p>Discard this draft? All changes will be lost.</p>
+            </div>
+            <div class="modal-footer d-flex align-items-center">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <form method="post" action="{% url 'editor_discard_draft' survey.uuid %}" class="d-inline mb-0">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger">Discard</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if effective_role == 'owner' %}
+<!-- Publish Confirmation Modal (testing → published) -->
+<div class="modal fade editor-modal" id="publishConfirmModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Publish Survey</h5>
+                <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <p>You are about to publish this survey and make it available to respondents.</p>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="clearTestData" checked>
+                    <label class="form-check-label" for="clearTestData">
+                        Delete all test responses (recommended)
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" onclick="doPublishFromTesting()">Publish</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // SortableJS for sections
+    var sectionsList = document.getElementById('sections-list');
+    if (sectionsList) {
+        Sortable.create(sectionsList, {
+            animation: 150,
+            handle: '.drag-handle',
+            onEnd: function() {
+                var ids = Array.from(sectionsList.children).map(function(el) {
+                    return el.dataset.sectionId;
+                });
+                fetch('{% url "editor_sections_reorder" survey.uuid %}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify({ section_ids: ids })
+                });
+                // Move HEAD badge to the first section
+                sectionsList.querySelectorAll('.badge-info').forEach(function(b) { b.remove(); });
+                var first = sectionsList.children[0];
+                if (first) {
+                    var badge = document.createElement('span');
+                    badge.className = 'badge badge-info';
+                    badge.style.fontSize = '0.65rem';
+                    badge.textContent = 'HEAD';
+                    first.querySelector('.section-title').after(badge);
+                }
+            }
+        });
+    }
+
+    // Section click → load section detail
+    document.addEventListener('click', function(e) {
+        var item = e.target.closest('.section-item');
+        if (!item || e.target.closest('.section-delete')) return;
+        var sectionId = item.dataset.sectionId;
+        var sectionName = item.dataset.sectionName;
+        // Highlight active
+        document.querySelectorAll('.section-item').forEach(function(el) { el.classList.remove('active'); });
+        item.classList.add('active');
+        // Load section detail via HTMX
+        htmx.ajax('GET', '/editor/surveys/{{ survey.uuid }}/sections/' + sectionId + '/', {
+            target: '#section-content',
+            swap: 'innerHTML'
+        });
+        // Update preview
+        var iframe = document.getElementById('preview-frame');
+        if (iframe) {
+            iframe.src = buildPreviewUrl(sectionName);
+        }
+    });
+
+    // Preview language
+    var langSelect = document.getElementById('preview-lang');
+    function getPreviewLang() {
+        return langSelect ? langSelect.value : '';
+    }
+    function buildPreviewUrl(sectionName) {
+        var url = '/editor/surveys/{{ survey.uuid }}/preview/' + sectionName + '/';
+        var lang = getPreviewLang();
+        if (lang) url += '?lang=' + lang;
+        return url;
+    }
+
+    // Refresh preview (debounced)
+    var previewTimeout;
+    function refreshPreview() {
+        clearTimeout(previewTimeout);
+        previewTimeout = setTimeout(function() {
+            var iframe = document.getElementById('preview-frame');
+            if (iframe && iframe.src) {
+                // Rebuild URL to preserve lang param
+                var url = new URL(iframe.src);
+                var lang = getPreviewLang();
+                if (lang) url.searchParams.set('lang', lang);
+                else url.searchParams.delete('lang');
+                iframe.src = url.toString();
+            }
+        }, 500);
+    }
+
+    if (langSelect) {
+        langSelect.addEventListener('change', function() { refreshPreview(); });
+    }
+
+    document.body.addEventListener('htmx:afterSwap', function(evt) {
+        if (evt.detail.target.id === 'questionModalBody' ||
+            evt.detail.target.id === 'mapPickerModalBody') return;
+        refreshPreview();
+    });
+
+    // After section delete, update HEAD badge and load first remaining section
+    document.body.addEventListener('sectionDeleted', function() {
+        sectionsList.querySelectorAll('.badge-info').forEach(function(b) { b.remove(); });
+        var first = document.querySelector('.section-item');
+        if (first) {
+            var badge = document.createElement('span');
+            badge.className = 'badge badge-info';
+            badge.style.fontSize = '0.65rem';
+            badge.textContent = 'HEAD';
+            first.querySelector('.section-title').after(badge);
+            first.click();
+        } else {
+            document.getElementById('section-content').innerHTML =
+                '<p class="text-muted p-4">No sections yet. Click "New Section" to add one.</p>';
+            var iframe = document.getElementById('preview-frame');
+            if (iframe) iframe.src = 'about:blank';
+        }
+    });
+
+    // After section saved, refresh preview
+    document.body.addEventListener('sectionSaved', function() {
+        refreshPreview();
+    });
+
+    // After question saved, close modal and refresh preview
+    document.body.addEventListener('questionSaved', function() {
+        $('#questionModal').modal('hide');
+        refreshPreview();
+    });
+
+    // After map position saved, close modal
+    document.body.addEventListener('mapPositionSaved', function() {
+        $('#mapPickerModal').modal('hide');
+    });
+
+    // Init SortableJS on question list and sub-question lists
+    function initSortableOnList(listEl) {
+        if (!listEl || listEl._sortable) return;
+        listEl._sortable = Sortable.create(listEl, {
+            animation: 150,
+            handle: '.drag-handle',
+            onEnd: function() {
+                var ids = Array.from(listEl.children).map(function(el) {
+                    return el.dataset.questionId;
+                });
+                fetch('{% url "editor_questions_reorder" survey.uuid %}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify({ question_ids: ids })
+                }).then(function() { refreshPreview(); });
+            }
+        });
+    }
+
+    document.body.addEventListener('htmx:afterSettle', function(evt) {
+        initSortableOnList(document.getElementById('questions-list'));
+        document.querySelectorAll('.subquestion-list').forEach(initSortableOnList);
+    });
+
+    // ── Panel resize & collapse ──
+    var STORAGE_KEY = 'editor_panels_{{ survey.uuid }}';
+    var sidebar = document.getElementById('editor-sidebar');
+    var preview = document.getElementById('editor-preview');
+    var resizeSidebar = document.getElementById('resize-sidebar');
+    var resizePreview = document.getElementById('resize-preview');
+    var sidebarCollapseBtn = document.getElementById('sidebar-collapse');
+    var sidebarExpandBtn = document.getElementById('sidebar-expand');
+    var previewCollapseBtn = document.getElementById('preview-collapse');
+    var previewExpandBtn = document.getElementById('preview-expand');
+
+    function savePanelState() {
+        var state = {
+            sidebarWidth: sidebar.style.width || '',
+            previewWidth: preview.style.width || '',
+            sidebarCollapsed: sidebar.classList.contains('collapsed'),
+            previewCollapsed: preview.classList.contains('collapsed')
+        };
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
+    }
+
+    function restorePanelState() {
+        try {
+            var raw = localStorage.getItem(STORAGE_KEY);
+            if (!raw) return;
+            var state = JSON.parse(raw);
+            if (state.sidebarWidth) sidebar.style.width = state.sidebarWidth;
+            if (state.previewWidth) preview.style.width = state.previewWidth;
+            if (state.sidebarCollapsed) toggleSidebar(true);
+            if (state.previewCollapsed) togglePreview(true);
+        } catch(e) {}
+    }
+
+    function toggleSidebar(collapsed) {
+        sidebar.classList.toggle('collapsed', collapsed);
+        resizeSidebar.classList.toggle('hidden', collapsed);
+        sidebarExpandBtn.classList.toggle('visible', collapsed);
+        savePanelState();
+    }
+
+    function togglePreview(collapsed) {
+        preview.classList.toggle('collapsed', collapsed);
+        resizePreview.classList.toggle('hidden', collapsed);
+        previewExpandBtn.classList.toggle('visible', collapsed);
+        savePanelState();
+    }
+
+    sidebarCollapseBtn.addEventListener('click', function(e) { e.stopPropagation(); toggleSidebar(true); });
+    sidebarExpandBtn.addEventListener('click', function() { toggleSidebar(false); });
+    previewCollapseBtn.addEventListener('click', function(e) { e.stopPropagation(); togglePreview(true); });
+    previewExpandBtn.addEventListener('click', function() { togglePreview(false); });
+
+    // Drag-to-resize
+    function initResize(handle, targetEl, direction) {
+        var startX, startWidth;
+        handle.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            startX = e.clientX;
+            startWidth = targetEl.getBoundingClientRect().width;
+            handle.classList.add('dragging');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            // Block iframe from stealing mouse events
+            document.querySelectorAll('iframe').forEach(function(f) {
+                f.style.pointerEvents = 'none';
+            });
+
+            function onMove(e) {
+                var delta = e.clientX - startX;
+                var newWidth = direction === 'left'
+                    ? Math.max(140, startWidth + delta)
+                    : Math.max(200, startWidth - delta);
+                targetEl.style.width = newWidth + 'px';
+            }
+            function onUp() {
+                handle.classList.remove('dragging');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                document.querySelectorAll('iframe').forEach(function(f) {
+                    f.style.pointerEvents = '';
+                });
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                savePanelState();
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    }
+
+    initResize(resizeSidebar, sidebar, 'left');
+    initResize(resizePreview, preview, 'right');
+
+    restorePanelState();
+
+    // ── Lifecycle transitions ──
+    document.body.addEventListener('statusChanged', function() {
+        window.location.reload();
+    });
+});
+
+function doTransition(status) {
+    var form = new FormData();
+    form.append('status', status);
+    fetch('{% url "editor_survey_transition" survey.uuid %}', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+        body: form,
+    }).then(function(resp) {
+        if (resp.ok) {
+            window.location.reload();
+        } else {
+            resp.text().then(function(msg) { alert(msg); });
+        }
+    });
+}
+
+function showPublishConfirm() {
+    $('#publishConfirmModal').modal('show');
+}
+
+function checkAndPublishDraft() {
+    fetch('{% url "editor_check_compatibility" survey.uuid %}', {
+        headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+    }).then(function(resp) {
+        return resp.json();
+    }).then(function(data) {
+        if (data.issues && data.issues.length > 0) {
+            var list = document.getElementById('compatibilityIssuesList');
+            list.innerHTML = '';
+            data.issues.forEach(function(issue) {
+                var li = document.createElement('li');
+                if (issue.type === 'deleted_question') {
+                    li.textContent = 'Deleted question "' + (issue.question_name || issue.question_code) + '" has ' + issue.answer_count + ' answer(s)';
+                } else if (issue.type === 'changed_input_type') {
+                    li.textContent = 'Question "' + (issue.question_name || issue.question_code) + '" type changed from ' + issue.old_type + ' to ' + issue.new_type + ' (' + issue.answer_count + ' answers)';
+                } else if (issue.type === 'removed_choice_codes') {
+                    li.textContent = 'Question "' + (issue.question_name || issue.question_code) + '" has removed choice codes affecting ' + issue.answer_count + ' answer(s)';
+                }
+                list.appendChild(li);
+            });
+            $('#publishDraftIssuesModal').modal('show');
+        } else {
+            $('#publishDraftModal').modal('show');
+        }
+    });
+}
+
+function doPublishDraft(force) {
+    var form = new FormData();
+    if (force) form.append('force', 'true');
+    fetch('{% url "editor_publish_draft" survey.uuid %}', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+        body: form,
+    }).then(function(resp) {
+        if (resp.redirected) {
+            window.location.href = resp.url;
+        } else if (resp.ok) {
+            window.location.reload();
+        } else {
+            resp.text().then(function(msg) { alert(msg); });
+        }
+    });
+}
+
+function doPublishFromTesting() {
+    var form = new FormData();
+    form.append('status', 'published');
+    if (document.getElementById('clearTestData').checked) {
+        form.append('clear_test_data', 'true');
+    }
+    fetch('{% url "editor_survey_transition" survey.uuid %}', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+        body: form,
+    }).then(function(resp) {
+        if (resp.ok) {
+            window.location.reload();
+        } else {
+            resp.text().then(function(msg) { alert(msg); });
+        }
+    });
+}
+</script>
+{% endblock %}

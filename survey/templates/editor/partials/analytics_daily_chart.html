@@ -1,0 +1,212 @@
+<div class="analytics-section">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
+        <h6 style="margin:0;">Response Timeline</h6>
+        <div style="display:flex;align-items:center;gap:0.5rem;">
+            <input type="datetime-local" id="timeline-from" class="form-control form-control-sm" style="width:auto;font-size:0.78rem;">
+            <span style="color:#9ca3af;font-size:0.78rem;">&ndash;</span>
+            <input type="datetime-local" id="timeline-to" class="form-control form-control-sm" style="width:auto;font-size:0.78rem;">
+            <select id="timeline-granularity" class="form-control form-control-sm" style="width:auto;font-size:0.78rem;">
+                <option value="hour">Hour</option>
+                <option value="day" selected>Day</option>
+                <option value="week">Week</option>
+                <option value="month">Month</option>
+            </select>
+            <button class="expand-btn" onclick="enterFocusMode(this.closest('.analytics-section'))"><i class="fas fa-expand"></i></button>
+        </div>
+    </div>
+    <div class="q-filter-pills" data-qid="timeline" style="display:none;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.4rem;"></div>
+    <div id="timeline-container" style="position:relative;user-select:none;">
+        <canvas id="dailyChart" height="80"></canvas>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var hourlyData = JSON.parse('{{ hourly_data_json|escapejs }}');
+
+    var shEl = document.getElementById('session-hours-data');
+    window._sessionHours = shEl ? JSON.parse(shEl.textContent) : [];
+
+    var fromInput = document.getElementById('timeline-from');
+    var toInput = document.getElementById('timeline-to');
+    var granSelect = document.getElementById('timeline-granularity');
+
+    if (hourlyData.length) {
+        fromInput.value = hourlyData[0].h.slice(0, 16);
+        toInput.value = hourlyData[hourlyData.length - 1].h.slice(0, 13) + ':59';
+    }
+
+    window._timelineChart = new Chart(document.getElementById('dailyChart'), {
+        type: 'bar',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'Total Sessions',
+                    data: [],
+                    backgroundColor: 'rgba(79, 70, 229, 0.15)',
+                    borderColor: 'rgba(79, 70, 229, 0.6)',
+                    borderWidth: 1,
+                    order: 2,
+                },
+                {
+                    label: 'Completed',
+                    data: [],
+                    backgroundColor: 'rgba(16, 185, 129, 0.7)',
+                    borderColor: 'rgba(16, 185, 129, 1)',
+                    borderWidth: 1,
+                    order: 1,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { position: 'top', labels: { font: { size: 12 } } }
+            },
+            scales: {
+                y: { beginAtZero: true, ticks: { precision: 0 } },
+                x: { ticks: { font: { size: 10 }, maxRotation: 45 } }
+            }
+        }
+    });
+
+    window._timelineBucketKey = function(hourStr, gran) {
+        if (gran === 'hour') return hourStr.slice(0, 13);
+        if (gran === 'day') return hourStr.slice(0, 10);
+        if (gran === 'month') return hourStr.slice(0, 7);
+        if (gran === 'week') {
+            var dt = new Date(hourStr);
+            var day = dt.getDay();
+            var diff = dt.getDate() - day + (day === 0 ? -6 : 1);
+            var monday = new Date(dt.getFullYear(), dt.getMonth(), diff);
+            return monday.toISOString().slice(0, 10);
+        }
+        return hourStr.slice(0, 10);
+    };
+
+    window._timelineFormatLabel = function(key, gran) {
+        if (gran === 'hour') return key.replace('T', ' ') + ':00';
+        return key;
+    };
+
+    // Display update — controlled by datetime inputs + granularity
+    window._updateTimelineFromHourly = function() {
+        var from = fromInput.value;
+        var to = toInput.value;
+        var gran = granSelect.value;
+
+        var filtered = hourlyData.filter(function(h) {
+            return (!from || h.h >= from) && (!to || h.h <= to);
+        });
+
+        var buckets = {};
+        filtered.forEach(function(h) {
+            var key = window._timelineBucketKey(h.h, gran);
+            if (!buckets[key]) buckets[key] = { total: 0, completed: 0 };
+            buckets[key].total += h.t;
+            buckets[key].completed += h.c;
+        });
+
+        var keys = Object.keys(buckets).sort();
+        window._timelineChart.data.labels = keys.map(function(k) { return window._timelineFormatLabel(k, gran); });
+        window._timelineChart.data.datasets[0].data = keys.map(function(k) { return buckets[k].total; });
+        window._timelineChart.data.datasets[1].data = keys.map(function(k) { return buckets[k].completed; });
+        window._timelineChart.update('none');
+    };
+
+    var _tlSliderRef = null; // set after RangeSlider init below
+    function onDisplayChange() {
+        window._updateTimelineFromHourly();
+        // If time filter active, reapply with new display range
+        if (_tlSliderRef && window.filterManager && window.filterManager.timeRange !== null) {
+            _tlSliderRef._fireFilter();
+        }
+    }
+
+    fromInput.addEventListener('change', onDisplayChange);
+    toInput.addEventListener('change', onDisplayChange);
+    granSelect.addEventListener('change', onDisplayChange);
+
+    window._updateTimelineFromHourly();
+
+    // --- Range handle selection (cross-filter) ---
+    var container = document.getElementById('timeline-container');
+
+    function getDisplayedRange() {
+        var from = fromInput.value;
+        var to = toInput.value;
+        return hourlyData.filter(function(h) {
+            return (!from || h.h >= from) && (!to || h.h <= to);
+        });
+    }
+
+    function rangeToTimestamp(pct) {
+        var displayed = getDisplayedRange();
+        if (!displayed.length) return '';
+        var idx = Math.round(pct * (displayed.length - 1));
+        idx = Math.max(0, Math.min(idx, displayed.length - 1));
+        return displayed[idx].h;
+    }
+
+    function formatTimestamp(pct) {
+        var ts = rangeToTimestamp(pct);
+        return ts ? ts.replace('T', ' ').slice(0, 16) : '';
+    }
+
+    var tlSlider = new RangeSlider(container, {
+        formatValue: formatTimestamp,
+        parseInput: function(lo, hi) {
+            // lo, hi are datetime-local strings
+            var displayed = getDisplayedRange();
+            if (!displayed.length) return { left: 0, right: 1 };
+            var leftPct = 0, rightPct = 1;
+            if (lo && lo !== '') {
+                for (var i = 0; i < displayed.length; i++) {
+                    if (displayed[i].h >= lo) { leftPct = i / (displayed.length - 1); break; }
+                }
+            }
+            if (hi && hi !== '') {
+                for (var j = displayed.length - 1; j >= 0; j--) {
+                    if (displayed[j].h <= hi) { rightPct = j / (displayed.length - 1); break; }
+                }
+            }
+            return { left: leftPct, right: rightPct };
+        },
+        onFilter: function(left, right) {
+            if (left <= 0.001 && right >= 0.999) {
+                window._timelineSelectionRange = null;
+                if (window.filterManager) window.filterManager.setTimeRange(null, null);
+                return;
+            }
+            var fromTs = rangeToTimestamp(left);
+            var toTs = rangeToTimestamp(right);
+            if (!fromTs || !toTs) return;
+
+            function cleanTs(ts) { return ts.replace('T', ' ').replace(/[+-]\d{2}:\d{2}.*$/, ''); }
+            window._timelineSelectionRange = {
+                from: left > 0.001 ? cleanTs(fromTs) : null,
+                to: right < 0.999 ? cleanTs(toTs) : null,
+            };
+
+            if (window.filterManager) {
+                // Truncate to hour precision to match _sessionHours format (YYYY-MM-DDTHH)
+                window.filterManager.setTimeRange(
+                    fromTs ? fromTs.slice(0, 13) : null,
+                    toTs ? toTs.slice(0, 13) : null
+                );
+            }
+        },
+        onReset: function() {
+            window._timelineSelectionRange = null;
+        },
+    });
+    tlSlider.setDatetimeMode();
+    _tlSliderRef = tlSlider;
+
+    window._resetTimelineHandles = function() {
+        tlSlider.reset();
+        window._timelineSelectionRange = null;
+    };
+});
+</script>

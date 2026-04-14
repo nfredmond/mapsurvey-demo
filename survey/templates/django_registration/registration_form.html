@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Create Account" %} — Mapsurvey{% endblock %}
+
+{% block content_wrapper_class %}auth-page{% endblock %}
+
+{% block content %}
+<div class="auth-card">
+    <h2>{% trans "Create Account" %}</h2>
+    <p class="auth-subtitle">{% trans "Sign up to create and manage geo-surveys." %}</p>
+
+    <form method="post" action="">
+        {% csrf_token %}
+        {% for field in form %}
+        <div class="form-group">
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.help_text %}
+                <small class="helptext">{{ field.help_text }}</small>
+            {% endif %}
+            {% if field.errors %}
+                <ul class="errorlist">
+                {% for error in field.errors %}
+                    <li>{{ error }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn-auth" id="register-btn">{% trans "Register" %}</button>
+    </form>
+    <script>
+    document.getElementById('register-btn').closest('form').addEventListener('submit', function() {
+        var btn = document.getElementById('register-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span style="display:inline-block;width:1rem;height:1rem;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:.5rem;"></span>Creating account\u2026';
+    });
+    </script>
+    <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+
+    <div class="auth-links">
+        <a href="{% url 'login' %}">{% trans "Already have an account? Sign in" %}</a>
+    </div>
+</div>
+{% endblock %}

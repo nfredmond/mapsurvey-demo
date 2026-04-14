@@ -1,0 +1,602 @@
+{% load static i18n i18n_extras %}
+<head>
+    {% include "partials/_analytics.html" %}
+
+    <link rel="icon" href="{% static 'favicon.ico' %}" sizes="any">
+    <link rel="icon" href="{% static 'favicon-32x32.png' %}" type="image/png" sizes="32x32">
+    <link rel="apple-touch-icon" href="{% static 'favicon-180x180.png' %}">
+    <link rel="manifest" href="{% static 'manifest.json' %}">
+    <meta name="theme-color" content="#3aafa9">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- js util -->
+    <script type="text/javascript" src="{% static 'js/util.js' %}"></script>
+
+    <link rel="stylesheet" type="text/css" href="{% static 'css/main.css' %}">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.4.0/dist/leaflet.css"
+   integrity="sha512-puBpdR0798OZvTTbP4A8Ix/l+A4dHDD0DGqYW6RQ+9jxkRFclaxxQb/SJAWZfWAkuyeQUytO7+7N4QKrDh+drA=="
+   crossorigin=""/>
+   <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.8.1/css/all.css" integrity="sha384-50oBUHEmvpQ+1lW4y57PTFmhCaXp0ML5d60M1M7uH2+nqUivzIebhndOJK28anvf" crossorigin="anonymous">
+    <script src="https://unpkg.com/leaflet@1.4.0/dist/leaflet.js"
+   integrity="sha512-QVftwZFqvtRNi0ZyCtsznlKSWOStnDORoefr1enyq5mVL4tmKB3S/EnC3rRJcxCPavG10IcrVGSmPh6Qw5lwrg=="
+   crossorigin=""></script>
+    
+    <!-- bootstrap -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+    <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js" integrity="sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1" crossorigin="anonymous"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js" integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM" crossorigin="anonymous"></script>
+    <!-- end bootstrap -->
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js" type="text/javascript"></script>
+
+   <!-- leaflet fa markers -->
+   <link rel='stylesheet' href="{% static 'css/L.Icon.FontAwesome.css' %}">
+   <script type="text/javascript" src="{% static 'js/L.Icon.FontAwesome.js' %}"></script>
+   <!--end fa markers -->
+
+</head>
+
+
+<button id="showButton" onclick="toggleInfo(true)" style="visibility: hidden;">
+        <i class="fas fa-angle-double-right" style="font-size:28px; width:28px; height:28px;"></i>
+</button>
+<div id="info_page" class="d-flex flex-column">
+    <div class="header">
+        <div id='title'>
+        	{% block title %}
+        	{% endblock %}
+        </div>
+        <i id="closeButton" class="fas fa-angle-double-left" onclick="toggleInfo(false)" style="font-size:28px; width:28px; height:28px;"></i>
+    </div>
+    {% block progress %}{% endblock %}
+    <div id='content'>
+    	{% block content %}
+    	{% endblock %}
+	</div>
+	<div id='navig_buttons' class="mt-auto">
+		{% block navig_buttons %}
+		{% endblock %}
+	</div>
+</div>
+
+<div id="drawbar" style="display: none;">
+    <button type="button" id="draw-cancel"><i class="fas fa-times"></i> {% trans "Cancel" %}</button>
+    <button type="button" id="draw-finish" disabled><i class="fas fa-check"></i> {% trans "Finish drawing" %}</button>
+</div>
+
+<div id="crosshair-overlay" style="display: none;">
+    <div class="crosshair-pin">
+        <svg width="40" height="64" viewBox="0 0 32 52" xmlns="http://www.w3.org/2000/svg">
+            <path class="crosshair-pin-path" d="M16,1 C7.7146,1 1,7.65636364 1,15.8648485 C1,24.0760606 16,51 16,51 C16,51 31,24.0760606 31,15.8648485 C31,7.65636364 24.2815,1 16,1 L16,1 Z" fill="#000"></path>
+        </svg>
+        <i class="crosshair-pin-icon fas fa-map-marker-alt"></i>
+    </div>
+    <div class="crosshair-actions">
+        <button type="button" class="crosshair-cancel"><i class="fas fa-times"></i> {% trans "Cancel" %}</button>
+        <button type="button" class="crosshair-apply"><i class="fas fa-check"></i> {% trans "Apply" %}</button>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<script type="text/javascript">
+    // Load i18n translations
+    var i18n = {% i18n_json %};
+</script>
+
+<script type="text/javascript">
+    //navigation
+    function isMobile() {
+        return window.matchMedia('(max-width: 768px)').matches;
+    }
+
+    function toggleInfo(show) {
+        if(show) {
+            info_page.classList.remove('hidden');
+            showButton.style.visibility = "hidden";
+        } else {
+            info_page.classList.add('hidden');
+            showButton.style.visibility = "visible";
+        }
+    }
+
+    function toggleDrawbar(show){
+        if (show){drawbar.style.display="flex";}
+        else{drawbar.style.display="none";}
+    }
+
+    var mapboxUrl = '{{ MAPBOX_URL }}';
+    var mapboxAccessToken = '{{ MAPBOX_ACCESS_TOKEN }}';
+    
+    var map = L.map('map', {zoomControl: false}).setView(["{{ section.start_map_postion.y }}".replace(",","."), "{{ section.start_map_postion.x }}".replace(",",".")], "{{ section.start_map_zoom }}");
+
+    L.control.zoom({position: 'bottomright'}).addTo(map);
+
+    L.tileLayer(
+        mapboxUrl, {
+            attribution: 'Data © <a href="http://osm.org/copyright">OpenStreetMap</a>',
+            maxZoom: 23,
+            accessToken: mapboxAccessToken,
+
+    }).addTo(map);
+
+    // Geolocation
+    var useGeolocation = {{ section.use_geolocation|yesno:"true,false" }};
+    var geoMarker = null;
+
+    function locateUser() {
+        if (!navigator.geolocation) return;
+        navigator.geolocation.getCurrentPosition(
+            function(position) {
+                var lat = position.coords.latitude;
+                var lng = position.coords.longitude;
+                map.setView([lat, lng], 13);
+                if (geoMarker) {
+                    geoMarker.setLatLng([lat, lng]);
+                } else {
+                    geoMarker = L.circleMarker([lat, lng], {
+                        radius: 8, fillColor: '#4285F4', color: '#fff',
+                        weight: 2, fillOpacity: 0.9
+                    }).addTo(map);
+                }
+            },
+            function(error) {
+                console.log('Geolocation failed:', error.message);
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+        );
+    }
+
+    if (useGeolocation) {
+        locateUser();
+
+        var LocateControl = L.Control.extend({
+            options: { position: 'bottomright' },
+            onAdd: function() {
+                var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+                var link = L.DomUtil.create('a', '', container);
+                link.href = '#';
+                link.title = 'Locate me';
+                link.setAttribute('role', 'button');
+                link.setAttribute('aria-label', 'Locate me');
+                link.style.cssText = 'font-size:18px;line-height:30px;width:30px;height:30px;display:block;text-align:center;cursor:pointer;';
+                link.textContent = '\uD83D\uDCCD';
+                L.DomEvent.on(link, 'click', function(e) {
+                    L.DomEvent.preventDefault(e);
+                    locateUser();
+                });
+                return container;
+            }
+        });
+        map.addControl(new LocateControl());
+    }
+
+    L.Draw.Polyline.prototype._onTouch = L.Util.falseFn;
+    L.Draw.Polygon.prototype._onTouch = L.Util.falseFn;
+
+    //l18n
+    L.drawLocal = {
+    // format: {
+    //  numeric: {
+    //      delimiters: {
+    //          thousands: ',',
+    //          decimal: '.'
+    //      }
+    //  }
+    // },
+        draw: {
+            toolbar: {
+                // #TODO: this should be reorganized where actions are nested in actions
+                // ex: actions.undo  or actions.cancel
+                actions: {
+                    title: 'Cancel drawing',
+                    text: 'Cancel'
+                },
+                finish: {
+                    title: 'Finish drawing',
+                    text: 'Finish'
+                },
+                undo: {
+                    title: 'Delete last point drawn',
+                    text: 'Delete last point'
+                },
+                buttons: {
+                    polyline: 'Draw a polyline',
+                    polygon: 'Draw a polygon',
+                    rectangle: 'Draw a rectangle',
+                    circle: 'Draw a circle',
+                    marker: 'Draw a marker',
+                    circlemarker: 'Draw a circlemarker'
+                }
+            },
+            handlers: {
+                circle: {
+                    tooltip: {
+                        start: 'Click and drag to draw circle.'
+                    },
+                    radius: 'Radius'
+                },
+                circlemarker: {
+                    tooltip: {
+                        start: 'Click map to place circle marker.'
+                    }
+                },
+                marker: {
+                    tooltip: {
+                        start: i18n.clickToPlaceMarker
+                    }
+                },
+                polygon: {
+                    tooltip: {
+                        start: i18n.clickToStartShape,
+                        cont: i18n.clickToContinueShape,
+                        end: i18n.clickFirstPointToClose
+                    }
+                },
+                polyline: {
+                    error: i18n.shapeEdgesCannotIntersect,
+                    tooltip: {
+                        start: i18n.clickToStartLine,
+                        cont: i18n.clickToContinueLine,
+                        end: i18n.clickLastPointToFinish
+                    }
+                },
+                rectangle: {
+                    tooltip: {
+                        start: 'Click and drag to draw rectangle.'
+                    }
+                },
+                simpleshape: {
+                    tooltip: {
+                        end: 'Release mouse to finish drawing.'
+                    }
+                }
+            }
+        },
+        edit: {
+            toolbar: {
+                actions: {
+                    save: {
+                        title: 'Save changes',
+                        text: 'Save'
+                    },
+                    cancel: {
+                        title: 'Cancel editing, discards all changes',
+                        text: 'Cancel'
+                    },
+                    clearAll: {
+                        title: 'Clear all layers',
+                        text: 'Clear All'
+                    }
+                },
+                buttons: {
+                    edit: 'Edit layers',
+                    editDisabled: 'No layers to edit',
+                    remove: 'Delete layers',
+                    removeDisabled: 'No layers to delete'
+                }
+            },
+            handlers: {
+                edit: {
+                    tooltip: {
+                        text: 'Drag handles or markers to edit features.',
+                        subtext: 'Click cancel to undo changes.'
+                    }
+                },
+                remove: {
+                    tooltip: {
+                        text: 'Click on a feature to remove.'
+                    }
+                }
+            }
+        }
+    };
+
+    var editableLayers = new L.FeatureGroup();
+
+    var currentQ = null;
+
+    var currentDrawFeature = null;
+
+    var currentEditLayer = null;
+
+    // Crosshair mode state
+    var crosshairColor = null;
+    var crosshairIcon = null;
+    var crosshairEditLayer = null;
+    var crosshairEditOriginalLatLng = null;
+    var crosshairMapClickHandler = null;
+        
+    map.addLayer(editableLayers);
+
+    var drawPluginOptions = {
+          position: 'topright',
+          draw: {
+            polygon: false,
+            marker:false,
+            polyline:false,
+            circlemarker: false,
+            circle:false,
+            rectangle: false,
+            },
+          edit: {
+            featureGroup: editableLayers, //REQUIRED!!
+            remove: false,
+            edit:false
+          },
+        };
+
+    // Initialise the draw control and pass it the FeatureGroup of editable layers
+    var drawControl = new L.Control.Draw(drawPluginOptions);
+    map.addControl(drawControl);
+
+    // Track the minimum vertex count for current draw type
+    var drawMinVertices = 0;
+
+    function showDrawbar(mode) {
+        var $cancel = $('#draw-cancel');
+        var $finish = $('#draw-finish');
+
+        if (mode === 'draw') {
+            $cancel.show();
+            $finish.prop('disabled', true).html('<i class="fas fa-check"></i> ' + i18n.finishDrawing);
+        } else if (mode === 'edit') {
+            $cancel.hide();
+            $finish.prop('disabled', false).html('<i class="fas fa-check"></i> ' + i18n.finishEditing);
+        }
+        toggleDrawbar(true);
+    }
+
+    function hideDrawbar() {
+        toggleDrawbar(false);
+        drawMinVertices = 0;
+    }
+
+    function startEditMode(layer){
+    	toggleInfo(false);
+
+    	// Finish any previous edit first (single-edit enforcement)
+    	if (currentEditLayer) {
+    	    currentEditLayer.editing.disable();
+    	}
+
+    	layer.editing.enable();
+    	currentEditLayer = layer;
+
+        showDrawbar('edit');
+        layer.closePopup();
+    }
+
+    function endEditMode(layer){
+    	toggleInfo(true);
+    	hideDrawbar();
+
+    	layer.editing.disable();
+    	currentEditLayer = null;
+    }
+
+    function showCrosshair(color, iconClass, editLayer) {
+        crosshairColor = color;
+        crosshairIcon = iconClass;
+        crosshairEditLayer = editLayer || null;
+        if (crosshairEditLayer) {
+            crosshairEditOriginalLatLng = crosshairEditLayer.getLatLng();
+        } else {
+            enablePointMapClickPlacement();
+        }
+        var overlay = document.getElementById('crosshair-overlay');
+        overlay.querySelector('.crosshair-pin-path').setAttribute('fill', color);
+        var iconEl = overlay.querySelector('.crosshair-pin-icon');
+        iconEl.className = 'crosshair-pin-icon fa ' + iconClass;
+        overlay.style.display = 'flex';
+    }
+
+    function hideCrosshair() {
+        document.getElementById('crosshair-overlay').style.display = 'none';
+        disablePointMapClickPlacement();
+        crosshairColor = null;
+        crosshairIcon = null;
+    }
+
+    function enablePointMapClickPlacement() {
+        disablePointMapClickPlacement();
+        crosshairMapClickHandler = function(e) {
+            placePointMarker(e.latlng);
+        };
+        map.on('click', crosshairMapClickHandler);
+    }
+
+    function disablePointMapClickPlacement() {
+        if (crosshairMapClickHandler) {
+            map.off('click', crosshairMapClickHandler);
+            crosshairMapClickHandler = null;
+        }
+    }
+
+    function placePointMarker(latLng) {
+        if (!crosshairColor || !crosshairIcon) {
+            return;
+        }
+
+        var layer = L.marker(latLng, {
+            icon: L.icon.fontAwesome({
+                iconClasses: 'fa ' + crosshairIcon,
+                markerColor: crosshairColor,
+                iconColor: '#FFF',
+                iconXOffset: -2,
+            })
+        });
+
+        hideCrosshair();
+
+        // Fire draw:created so survey_section.html handles popup/layer setup.
+        map.fire('draw:created', {layerType: 'marker', layer: layer});
+    }
+
+    // Get LatLng at the pin tip (bottom of the crosshair pin, 32px below screen center)
+    function getCrosshairLatLng() {
+        var size = map.getSize();
+        var pinTipPoint = L.point(size.x / 2, size.y / 2 + 32);
+        return map.containerPointToLatLng(pinTipPoint);
+    }
+
+    $('.crosshair-apply').click(function() {
+        var pinLatLng = getCrosshairLatLng();
+
+        if (crosshairEditLayer) {
+            // Edit mode: move the existing marker to new position
+            crosshairEditLayer.setLatLng(pinLatLng);
+            crosshairEditLayer.setOpacity(1);
+            crosshairEditLayer = null;
+            crosshairEditOriginalLatLng = null;
+            hideCrosshair();
+            toggleInfo(true);
+        } else {
+            // New placement mode: place at the crosshair pin.
+            placePointMarker(pinLatLng);
+        }
+    });
+
+    $('.crosshair-cancel').click(function() {
+        if (crosshairEditLayer) {
+            // Edit mode: restore marker visibility at original position
+            crosshairEditLayer.setLatLng(crosshairEditOriginalLatLng);
+            crosshairEditLayer.setOpacity(1);
+            crosshairEditLayer = null;
+            crosshairEditOriginalLatLng = null;
+        }
+        hideCrosshair();
+        toggleInfo(true);
+        currentQ = null;
+    });
+
+    $("#section_question_form").submit(function(e){
+    	// First, collect geo data from map layers
+    	editableLayers.eachLayer(function(layer){
+    		let valueOfInput = $(".geo-inp[name='" + layer.feature.properties.question_id + "'").val();
+    		valueOfInput += (JSON.stringify(layer.toGeoJSON()) + "|");
+        	$(".geo-inp[name='" + layer.feature.properties.question_id + "'").val(valueOfInput);
+    	});
+
+    	// Validate required geo fields
+    	let isValid = true;
+    	let firstInvalidField = null;
+
+    	// Remove previous error styling
+    	$('.drawbutton').css('border', '');
+
+    	$('.geo-inp[data-required="true"]').each(function() {
+    		if (!$(this).val()) {
+    			isValid = false;
+    			// Find the corresponding draw button and highlight it
+    			let fieldName = $(this).attr('name');
+    			let drawButton = $('button.drawbutton[name="' + fieldName + '"]');
+    			drawButton.css('border', '3px solid #dc3545');
+
+    			if (!firstInvalidField) {
+    				firstInvalidField = drawButton;
+    			}
+    		}
+    	});
+
+    	if (!isValid) {
+    		e.preventDefault();
+
+    		// Scroll to first invalid field
+    		if (firstInvalidField) {
+    			$('html, body').animate({
+    				scrollTop: firstInvalidField.offset().top - 100
+    			}, 300);
+    		}
+
+    		alert('Please complete all required map questions before proceeding.');
+    		return false;
+    	}
+    })
+
+    // --- Draw action bar buttons ---
+
+    $('#draw-cancel').click(function() {
+        if (currentDrawFeature) {
+            currentDrawFeature.disable();
+            currentDrawFeature = null;
+        }
+        hideDrawbar();
+        toggleInfo(true);
+        currentQ = null;
+    });
+
+    $('#draw-finish').click(function() {
+        if (currentEditLayer) {
+            endEditMode(currentEditLayer);
+        } else if (currentDrawFeature && currentDrawFeature.completeShape) {
+            currentDrawFeature.completeShape();
+        }
+    });
+
+    // Track vertex additions to enable/disable Finish button
+    map.on('draw:drawvertex', function() {
+        if (currentDrawFeature && currentDrawFeature._markers) {
+            var count = currentDrawFeature._markers.length;
+            $('#draw-finish').prop('disabled', count < drawMinVertices);
+        }
+    });
+
+    // Hide drawbar when drawing completes (draw:created fires after completeShape or manual close)
+    map.on('draw:created', function() {
+        hideDrawbar();
+    });
+
+    // --- Geo question draw buttons ---
+
+    $('.drawpolygon').click(function() {
+        if (currentDrawFeature) {
+            currentDrawFeature.disable();
+            currentDrawFeature = null;
+        }
+        currentDrawFeature = new L.Draw.Polygon(map);
+        currentDrawFeature.setOptions({ shapeOptions: { color: $(this).attr('data-color') } });
+        currentDrawFeature.enable();
+
+        toggleInfo(false);
+        currentQ = $(this).attr('name');
+        drawMinVertices = 3;
+        showDrawbar('draw');
+    });
+
+    $('.drawline').click(function() {
+        if (currentDrawFeature) {
+            currentDrawFeature.disable();
+            currentDrawFeature = null;
+        }
+        currentDrawFeature = new L.Draw.Polyline(map);
+        currentDrawFeature.setOptions({ shapeOptions: { color: $(this).attr('data-color') } });
+        currentDrawFeature.enable();
+
+        toggleInfo(false);
+        currentQ = $(this).attr('name');
+        drawMinVertices = 2;
+        showDrawbar('draw');
+    });
+
+    $('.drawpoint').click(function() {
+        var color = $(this).attr('data-color');
+        var icon = $(this).attr('data-icon');
+
+        toggleInfo(false);
+        currentQ = $(this).attr('name');
+
+        showButton.style.visibility = "hidden";
+        showCrosshair(color, icon);
+    })
+    
+</script>
+
+{% block section_scripts %}
+{% endblock %}
+
+</body>
+

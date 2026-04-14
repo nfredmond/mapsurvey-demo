@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgis/postgis
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - dbbackups:/backups
+    env_file:
+      - ./.env
+    ports:
+      - 5434:5432
+    restart: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mapsurvey"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build: .
+    command: gunicorn --bind :8000 mapsurvey.wsgi:application
+    ports:
+      - 8000:8000
+    env_file:
+      - ./.env
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/robots.txt\")'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - 6379:6379
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  celery:
+    build: .
+    command: celery -A mapsurvey worker -l info
+    env_file:
+      - ./.env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  dbbackups:
+  postgres-data:

@@ -1,0 +1,322 @@
+{% load static %}
+
+<html>
+    <head>
+        <title>{% block title %}Mapsurvey{% endblock %}</title>
+        {% include "partials/_analytics.html" %}
+        <link rel="icon" href="{% static 'favicon.ico' %}" sizes="any">
+        <link rel="icon" href="{% static 'favicon-32x32.png' %}" type="image/png" sizes="32x32">
+        <link rel="apple-touch-icon" href="{% static 'favicon-180x180.png' %}">
+        <link rel="manifest" href="{% static 'manifest.json' %}">
+        <meta name="theme-color" content="#3aafa9">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+        <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.8.1/css/all.css">
+        <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+        <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js" integrity="sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1" crossorigin="anonymous"></script>
+        <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js" integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM" crossorigin="anonymous"></script>
+        <style>
+            html {
+                overflow-x: hidden;
+            }
+            body {
+                font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+            }
+            .site-navbar {
+                background: #fff;
+                border-bottom: 1px solid #e5e7eb;
+                padding: 0.5rem 1rem;
+                display: flex;
+                align-items: center;
+                gap: 0.5rem 1rem;
+                flex-wrap: wrap;
+            }
+            .site-navbar .navbar-brand {
+                font-weight: 700;
+                color: #111827;
+                font-size: 1.1rem;
+                text-decoration: none;
+                margin-right: auto;
+            }
+            .site-navbar .navbar-brand:hover { color: #111827; }
+            .site-navbar a { color: #6b7280; text-decoration: none; font-size: 0.85rem; }
+            .site-navbar a:hover { color: #4f46e5; }
+            .site-navbar .nav-username { color: #9ca3af; font-size: 0.85rem; }
+            .auth-page {
+                min-height: calc(100vh - 49px);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: #f7f5f2;
+                padding: 2rem 1rem;
+            }
+            .auth-card {
+                background: #fff;
+                border-radius: 10px;
+                box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+                width: 100%;
+                max-width: 420px;
+                padding: 2.5rem 2rem;
+            }
+            .auth-card h2 {
+                font-size: 1.5rem;
+                font-weight: 700;
+                color: #1a1a1a;
+                margin-bottom: 0.25rem;
+            }
+            .auth-card .auth-subtitle {
+                color: #6b6560;
+                font-size: 0.95rem;
+                margin-bottom: 1.5rem;
+            }
+            .auth-card .form-control {
+                border-radius: 6px;
+                border: 1px solid #d1ccc5;
+                padding: 0.6rem 0.85rem;
+                font-size: 0.95rem;
+                transition: border-color 0.15s;
+            }
+            .auth-card .form-control:focus {
+                border-color: #2a7f6f;
+                box-shadow: 0 0 0 3px rgba(42,127,111,0.12);
+            }
+            .auth-card label {
+                font-weight: 500;
+                font-size: 0.9rem;
+                color: #374151;
+                margin-bottom: 0.3rem;
+            }
+            .auth-card .btn-auth {
+                width: 100%;
+                padding: 0.65rem;
+                border-radius: 6px;
+                font-weight: 600;
+                font-size: 0.95rem;
+                background: #2a7f6f;
+                border: none;
+                color: #fff;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .auth-card .btn-auth:hover {
+                background: #1f6558;
+            }
+            .auth-card .auth-links {
+                margin-top: 1.25rem;
+                text-align: center;
+                font-size: 0.9rem;
+            }
+            .auth-card .auth-links a {
+                color: #2a7f6f;
+                text-decoration: none;
+            }
+            .auth-card .auth-links a:hover {
+                text-decoration: underline;
+            }
+            .auth-card .auth-divider {
+                color: #c8c2b8;
+                margin: 0 0.5rem;
+            }
+            .auth-card .alert {
+                font-size: 0.9rem;
+                border-radius: 6px;
+            }
+            .auth-card .form-group {
+                margin-bottom: 1rem;
+            }
+            .auth-card .form-group label {
+                display: block;
+            }
+            .auth-card .form-group input,
+            .auth-card .form-group select,
+            .auth-card .form-group textarea {
+                display: block;
+                width: 100%;
+                border-radius: 6px;
+                border: 1px solid #d1ccc5;
+                padding: 0.6rem 0.85rem;
+                font-size: 0.95rem;
+                transition: border-color 0.15s;
+            }
+            .auth-card .input-group {
+                display: flex;
+            }
+            .auth-card .input-group input {
+                width: 1%;
+                flex: 1 1 auto;
+                border-radius: 6px 0 0 6px;
+            }
+            .auth-card .form-group input:focus,
+            .auth-card .form-group select:focus,
+            .auth-card .form-group textarea:focus {
+                border-color: #2a7f6f;
+                box-shadow: 0 0 0 3px rgba(42,127,111,0.12);
+                outline: none;
+            }
+            .auth-card .helptext {
+                display: block;
+                font-size: 0.8rem;
+                color: #6b6560;
+                margin-top: 0.25rem;
+            }
+            .auth-card .helptext ul {
+                margin: 0.25rem 0 0 0;
+                padding-left: 1.25rem;
+            }
+            .auth-card .helptext li {
+                font-size: 0.8rem;
+                color: #6b6560;
+            }
+            .auth-card .errorlist {
+                list-style: none;
+                padding: 0;
+                margin: 0 0 0.5rem 0;
+            }
+            .auth-card .errorlist li {
+                color: #dc3545;
+                font-size: 0.85rem;
+            }
+            .auth-card p > label {
+                display: block;
+            }
+            .auth-card p > input,
+            .auth-card p > select {
+                display: block;
+                width: 100%;
+                border-radius: 6px;
+                border: 1px solid #d1ccc5;
+                padding: 0.6rem 0.85rem;
+                font-size: 0.95rem;
+                transition: border-color 0.15s;
+                margin-bottom: 0.75rem;
+            }
+            .auth-card p > input:focus,
+            .auth-card p > select:focus {
+                border-color: #2a7f6f;
+                box-shadow: 0 0 0 3px rgba(42,127,111,0.12);
+                outline: none;
+            }
+            .auth-message {
+                text-align: center;
+            }
+            .auth-message .auth-icon {
+                font-size: 2.5rem;
+                margin-bottom: 1rem;
+                display: block;
+            }
+            .auth-message p {
+                color: #6b6560;
+                font-size: 0.95rem;
+                line-height: 1.6;
+            }
+            .pwd-toggle-btn {
+                border: 1px solid #d1ccc5;
+                border-left: none;
+                background: #fff;
+                color: #6b7280;
+                cursor: pointer;
+                padding: 0 0.75rem;
+                display: flex;
+                align-items: center;
+                border-radius: 0 6px 6px 0;
+            }
+            .pwd-toggle-btn:hover { color: #374151; }
+        </style>
+        {% block extra_head %}{% endblock %}
+    </head>
+    <body>
+    	<div class="header">
+            {% block header %}
+                <nav class="site-navbar">
+                  <a class="navbar-brand" href="/">Mapsurvey</a>
+                  {% if user.is_authenticated %}
+                      <div class="dropdown d-inline">
+                          <a class="dropdown-toggle" href="#" role="button" data-toggle="dropdown" style="color:#6b7280;font-size:0.85rem;text-decoration:none;">
+                              <i class="fas fa-building" style="margin-right:4px;"></i>{{ active_org.name|default:"No organization" }}
+                          </a>
+                          <div class="dropdown-menu dropdown-menu-right">
+                              {% for o in user_orgs %}
+                              <form method="post" action="{% url 'org_switch' %}" class="d-inline">
+                                  {% csrf_token %}
+                                  <input type="hidden" name="org_id" value="{{ o.id }}">
+                                  <button type="submit" class="dropdown-item {% if active_org and o.id == active_org.id %}active{% endif %}">{{ o.name }}</button>
+                              </form>
+                              {% endfor %}
+                              <div class="dropdown-divider"></div>
+                              <a class="dropdown-item" href="{% url 'org_create' %}"><i class="fas fa-plus" style="margin-right:4px;"></i>New Organization</a>
+                              {% if active_org %}
+                              <a class="dropdown-item" href="{% url 'org_settings' active_org.slug %}"><i class="fas fa-cog" style="margin-right:4px;"></i>Settings</a>
+                              <a class="dropdown-item" href="{% url 'org_members' active_org.slug %}"><i class="fas fa-users" style="margin-right:4px;"></i>Members</a>
+                              {% endif %}
+                          </div>
+                      </div>
+                      <span class="nav-username">{{ user.get_username }}</span>
+                      <a href="{% url 'logout' %}" style="font-size:0.85rem;">Logout</a>
+                  {% else %}
+                      <a href="{% url 'login' %}?next={{ request.path }}" style="font-size:0.85rem;">Login</a>
+                  {% endif %}
+                </nav>
+            {% endblock %}
+    	</div>
+        <div class="{% block content_wrapper_class %}content container{% endblock %}">
+        	{% block content %}
+    		{% endblock %}
+        </div>
+        <div class="footer">
+        	{% block footer %}
+        	{% endblock %}
+        </div>
+    <script>
+    document.querySelectorAll('input[type="password"]').forEach(function(input) {
+        var group = input.closest('.input-group');
+        if (group) {
+            var append = group.querySelector('.input-group-append');
+            if (!append) {
+                append = document.createElement('div');
+                append.className = 'input-group-append';
+                group.appendChild(append);
+            }
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn pwd-toggle-btn';
+            btn.innerHTML = '<i class="fas fa-eye"></i>';
+            append.prepend(btn);
+        } else {
+            var wrapper = document.createElement('div');
+            wrapper.className = 'input-group';
+            input.parentNode.insertBefore(wrapper, input);
+            wrapper.appendChild(input);
+            var append = document.createElement('div');
+            append.className = 'input-group-append';
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn pwd-toggle-btn';
+            btn.innerHTML = '<i class="fas fa-eye"></i>';
+            append.appendChild(btn);
+            wrapper.appendChild(append);
+        }
+        btn.addEventListener('click', function() {
+            var isPassword = input.type === 'password';
+            input.type = isPassword ? 'text' : 'password';
+            this.innerHTML = isPassword ? '<i class="fas fa-eye-slash"></i>' : '<i class="fas fa-eye"></i>';
+        });
+    });
+    </script>
+    <!--Start of Tawk.to Script-->
+    <script type="text/javascript">
+    var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
+    Tawk_API.onLoad = function(){ Tawk_API.minimize(); };
+    (function(){
+    var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
+    s1.async=true;
+    s1.src='https://embed.tawk.to/69ca3a84d3271a1c35b1faa6/1jkuv95h1';
+    s1.charset='UTF-8';
+    s1.setAttribute('crossorigin','*');
+    s0.parentNode.insertBefore(s1,s0);
+    })();
+    </script>
+    <!--End of Tawk.to Script-->
+    </body>
+</html>
