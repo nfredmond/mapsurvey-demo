@@ -1,8 +1,10 @@
 """Vercel WSGI entrypoint.
 
-Vercel's Python runtime looks for a top-level WSGI/ASGI application named
-``app`` in common entrypoint files. The real Django WSGI module stays inside
-the project package for local development and Docker.
+Docker and local development use ``mapsurvey/wsgi.py`` for the full
+Django/GeoDjango app. This root file is only for Vercel, whose Python runtime
+does not include native GDAL.
 """
 
-from mapsurvey.wsgi import app, application  # noqa: F401
+from vercel_app import app
+
+application = app

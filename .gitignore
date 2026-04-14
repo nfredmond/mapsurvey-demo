@@ -10,3 +10,4 @@ mediafiles/
 
 __pycache__/
 *.pyc
+.vercel

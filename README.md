@@ -60,16 +60,20 @@ python manage.py seed_sdbike_demo
 
 ## Deployment Notes
 
-This demo is a Dockerized Django/GeoDjango app. Render, Fly.io, or Railway are still the best fit for the full long-running service. The repo also includes a Vercel serverless entrypoint in `vercel.json` and root `wsgi.py` so GitHub deployments to Vercel route traffic to Django instead of returning a platform 404.
+This demo is a Dockerized Django/GeoDjango app. Render, Fly.io, or Railway are still the best fit for the full long-running service. The repo also includes a lightweight Vercel serverless demo in `vercel_app.py`, routed by `vercel.json` and root `wsgi.py`, because Vercel's Python runtime does not include the native GDAL library required by GeoDjango.
 
-On Vercel, run migrations and seed data against Supabase separately before sharing the demo:
+For the full Django/GeoDjango deployment, run migrations and seed data before sharing the demo:
 
 ```bash
 python manage.py migrate
 python manage.py seed_sdbike_demo
 ```
 
-For Vercel, Render, or another host, set:
+For the Vercel demo, set:
+
+- `MAPBOX_ACCESS_TOKEN` if using Mapbox tiles
+
+For the full Docker deployment, set:
 
 - `SECRET_KEY`
 - `DEBUG=0`
