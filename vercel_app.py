@@ -35,12 +35,13 @@ def _response(start_response, status, body, content_type="text/html; charset=utf
 
 
 def _json_response(start_response, status, data):
-    return _response(
-        start_response,
-        status,
-        json.dumps(data, separators=(",", ":")),
-        "application/json; charset=utf-8",
-    )
+    payload = json.dumps(data, separators=(",", ":")).encode("utf-8")
+    start_response(status, [
+        ("Content-Type", "application/json; charset=utf-8"),
+        ("Content-Length", str(len(payload))),
+        ("Cache-Control", "no-store"),
+    ])
+    return [payload]
 
 
 def _read_json(environ):
