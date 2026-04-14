@@ -1,0 +1,17 @@
+Pipfile
+Pipfile.lock
+Dockerfile
+docker-compose.yml
+entrypoint.sh
+render.yaml
+
+mapsurvey/
+newsletter/
+mediafiles/
+staticfiles/
+
+survey/management/
+survey/migrations/
+survey/templates/
+survey/*.py
+survey/tests/
