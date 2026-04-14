@@ -125,8 +125,54 @@ def _layout(title, body):
     .workspace {{ min-height: calc(100vh - 70px); display: grid; grid-template-columns: 380px minmax(0, 1fr); }}
     .panel {{ padding: 24px; border-right: 1px solid var(--line); background: white; overflow: auto; }}
     .panel h1 {{ font-size: 32px; line-height: 1.05; margin-bottom: 12px; }}
+    .wizard-top {{ display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: 16px 0; }}
+    .progress {{ flex: 1; height: 8px; background: var(--soft); border-radius: 8px; overflow: hidden; }}
+    .progress span {{ display: block; height: 100%; width: 25%; background: var(--green); transition: width .2s ease; }}
+    .count {{ color: var(--muted); font-weight: 800; font-size: 13px; white-space: nowrap; }}
+    .screen {{ display: none; }}
+    .screen.active {{ display: block; }}
     .step {{ border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 12px 0; background: var(--paper); }}
     .step strong {{ display: block; margin-bottom: 5px; }}
+    .choice-list {{ display: grid; gap: 10px; margin: 14px 0; }}
+    .choice {{
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: white;
+      border-radius: 8px;
+      padding: 13px 14px;
+      cursor: pointer;
+      font-weight: 800;
+      color: var(--ink);
+    }}
+    .choice span {{ display: block; margin-top: 4px; color: var(--muted); font-weight: 600; line-height: 1.35; }}
+    .choice.selected {{ border-color: var(--green); box-shadow: inset 0 0 0 2px var(--green); }}
+    .field {{ display: grid; gap: 7px; margin: 13px 0; }}
+    .field label {{ font-weight: 800; }}
+    textarea, input[type="text"], input[type="file"] {{
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 11px;
+      font: inherit;
+      color: var(--ink);
+      background: white;
+    }}
+    textarea {{ min-height: 112px; resize: vertical; }}
+    .row {{ display: flex; gap: 10px; flex-wrap: wrap; }}
+    .row .button {{ flex: 1; min-width: 128px; }}
+    .button.danger {{ background: #d93636; color: white; border-color: #d93636; }}
+    .button.ghost {{ background: white; border-color: var(--line); color: var(--ink); }}
+    .photo-preview {{ display: none; width: 100%; max-height: 150px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }}
+    .pin-list {{ display: grid; gap: 10px; margin-top: 14px; }}
+    .pin-card {{ border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--paper); }}
+    .pin-card strong {{ display: block; margin-bottom: 4px; }}
+    .pin-card p {{ color: var(--muted); margin: 0 0 8px; line-height: 1.35; }}
+    .pin-card img {{ width: 100%; max-height: 120px; object-fit: cover; border-radius: 8px; margin: 4px 0 10px; }}
+    .pin-actions {{ display: flex; gap: 8px; }}
+    .small-button {{ border: 1px solid var(--line); background: white; border-radius: 8px; padding: 7px 10px; cursor: pointer; font-weight: 800; }}
+    .small-button.danger {{ color: #b42323; }}
+    .status-pill {{ display: inline-flex; padding: 5px 8px; border-radius: 8px; background: var(--soft); color: var(--green); font-weight: 800; font-size: 12px; margin-bottom: 10px; }}
     .map-wrap {{ position: relative; min-height: 720px; }}
     #map {{ position: absolute; inset: 0; background: #d9e9e4; }}
     .fallback-map {{
@@ -162,6 +208,10 @@ def _layout(title, body):
       box-shadow: 0 4px 12px rgba(0,0,0,.25);
     }}
     .pin::after {{ content: ""; position: absolute; inset: 5px; border-radius: 50%; background: white; }}
+    .mapboxgl-popup-content {{ border-radius: 8px; padding: 12px; max-width: 260px; }}
+    .popup-title {{ font-weight: 800; margin-bottom: 4px; }}
+    .popup-note {{ color: var(--muted); margin-bottom: 8px; }}
+    .popup-photo {{ width: 220px; max-height: 120px; object-fit: cover; border-radius: 8px; display: block; }}
     @media (max-width: 780px) {{
       .hero, .workspace {{ grid-template-columns: 1fr; }}
       .hero {{ min-height: auto; }}
@@ -207,7 +257,7 @@ def _home():
 
 def _survey():
     token_js = MAPBOX_TOKEN.replace("\\", "\\\\").replace("'", "\\'")
-    return _layout("Bike Better San Diego Survey", f"""
+    body = """
 <nav class="nav">
   <div class="brand">Bike Better San Diego</div>
   <a href="/">Overview</a>
@@ -215,72 +265,384 @@ def _survey():
 <main class="workspace">
   <aside class="panel">
     <div class="eyebrow">Map safety concerns</div>
-    <h1>Drop pins where biking feels unsafe.</h1>
-    <p class="lead">Click the map to mark dangerous crossings, near misses, missing bike lanes, or places that keep people from riding.</p>
-    <div class="step"><strong>1. Mark a safety concern</strong>Click anywhere on the map to add a red pin.</div>
-    <div class="step"><strong>2. Add context</strong>Use this demo during a meeting to talk through the story behind each pin.</div>
-    <div class="step"><strong>3. Export priorities</strong>Clustered concerns become a practical advocacy agenda.</div>
-    <a class="button" href="/">Back to homepage</a>
+    <h1 id="wizardTitle">Start with one bike safety story.</h1>
+    <div class="wizard-top">
+      <div class="progress" aria-label="Survey progress"><span id="progressBar"></span></div>
+      <div class="count" id="stepCount">1 / 4</div>
+    </div>
+    <section class="screen active" data-screen="intro">
+      <p class="lead">Walk through a quick map survey, then review or remove what you added before sharing priorities.</p>
+      <div class="step"><strong>Step 1</strong>Pick the kind of feedback you want to leave.</div>
+      <div class="step"><strong>Step 2</strong>Click the map where it happens.</div>
+      <div class="step"><strong>Step 3</strong>Add a note and optional photo.</div>
+      <button class="button" type="button" data-action="start">Start survey</button>
+    </section>
+    <section class="screen" data-screen="category">
+      <p class="lead">Choose the issue that best fits this location.</p>
+      <div class="choice-list" id="categoryList">
+        <button class="choice" type="button" data-category="Dangerous crossing">Dangerous crossing<span>Hard to cross, poor visibility, or fast turning traffic.</span></button>
+        <button class="choice" type="button" data-category="Near miss">Near miss<span>A crash almost happened here.</span></button>
+        <button class="choice" type="button" data-category="Missing bike connection">Missing bike connection<span>A gap in the network keeps riders from using this route.</span></button>
+        <button class="choice" type="button" data-category="Maintenance problem">Maintenance problem<span>Pavement, debris, drainage, signs, or signal timing.</span></button>
+      </div>
+      <div class="row">
+        <button class="button ghost" type="button" data-action="back">Back</button>
+        <button class="button" type="button" data-action="choose-location" disabled>Next: place pin</button>
+      </div>
+    </section>
+    <section class="screen" data-screen="location">
+      <p class="lead">Click the exact spot on the map. Drag the blue marker if you need to adjust it.</p>
+      <div class="step"><strong id="activeCategory">Safety concern</strong><span id="locationStatus">Waiting for a map click.</span></div>
+      <div class="row">
+        <button class="button ghost" type="button" data-action="back">Back</button>
+        <button class="button" type="button" data-action="details" disabled>Next: add details</button>
+      </div>
+    </section>
+    <section class="screen" data-screen="details">
+      <p class="lead">Add enough detail for staff, advocates, or elected offices to understand the need.</p>
+      <div class="field">
+        <label for="pinTitle">Short label</label>
+        <input id="pinTitle" type="text" maxlength="80" placeholder="Example: Fast turns at 30th and University">
+      </div>
+      <div class="field">
+        <label for="pinNote">What should change here?</label>
+        <textarea id="pinNote" maxlength="500" placeholder="Describe the concern, who is affected, and what would help."></textarea>
+      </div>
+      <div class="field">
+        <label for="pinPhoto">Photo, optional</label>
+        <input id="pinPhoto" type="file" accept="image/*">
+        <img class="photo-preview" id="photoPreview" alt="Selected photo preview">
+      </div>
+      <div class="row">
+        <button class="button ghost" type="button" data-action="back">Back</button>
+        <button class="button" type="button" data-action="save">Save pin</button>
+      </div>
+    </section>
+    <section class="screen" data-screen="review">
+      <span class="status-pill" id="savedStatus">Saved to this browser</span>
+      <p class="lead">Review the mapped comments. Open a pin to edit it, or remove entries that should not be shared.</p>
+      <div class="pin-list" id="pinList"></div>
+      <div class="row">
+        <button class="button" type="button" data-action="new">Add another pin</button>
+        <button class="button ghost" type="button" data-action="reset">Reset demo</button>
+      </div>
+    </section>
   </aside>
   <section class="map-wrap">
     <div id="map"><div class="fallback-map"></div></div>
-    <div class="map-note" id="note">Pins are saved in this browser for the demo. Click the map to add another concern.</div>
+    <div class="map-note" id="note">Use the wizard to add a note, photo, and location.</div>
   </section>
 </main>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.10.0/mapbox-gl.js"></script>
 <script>
-const token = '{token_js}';
+const token = '__MAPBOX_TOKEN__';
+const storageKey = 'sdbikeSurveyPinsV2';
 const seeded = [
-  [-117.1611, 32.7157, 'Downtown crossing stress'],
-  [-117.1452, 32.7299, 'Missing protected lane'],
-  [-117.2490, 32.7920, 'Beach route pinch point'],
-  [-117.1048, 32.7587, 'Fast traffic near school']
+  { id: 'seed-1', lng: -117.1611, lat: 32.7157, category: 'Dangerous crossing', title: 'Downtown crossing stress', note: 'Riders report fast right turns and short crossing time near the trolley connection.', photo: '' },
+  { id: 'seed-2', lng: -117.1452, lat: 32.7299, category: 'Missing bike connection', title: 'Missing protected lane', note: 'The route feels comfortable until this gap pushes riders into fast traffic.', photo: '' },
+  { id: 'seed-3', lng: -117.2490, lat: 32.7920, category: 'Maintenance problem', title: 'Beach route pinch point', note: 'Sand and parked cars narrow the usable riding space on busy weekends.', photo: '' },
+  { id: 'seed-4', lng: -117.1048, lat: 32.7587, category: 'Near miss', title: 'Fast traffic near school', note: 'Families avoid this block because passing drivers leave little room.', photo: '' }
 ];
-const saved = JSON.parse(localStorage.getItem('sdbikePins') || '[]');
-const pins = seeded.concat(saved);
-function savePin(lngLat) {{
-  saved.push([lngLat.lng, lngLat.lat, 'Community concern']);
-  localStorage.setItem('sdbikePins', JSON.stringify(saved));
-}}
-function addFallbackPin(x, y) {{
-  const pin = document.createElement('div');
-  pin.className = 'pin';
-  pin.style.left = x + 'px';
-  pin.style.top = y + 'px';
-  document.querySelector('.map-wrap').appendChild(pin);
-}}
-if (token && window.mapboxgl) {{
+
+let saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+let map = null;
+let mode = 'browse';
+let screen = 'intro';
+let draft = {};
+let editingId = null;
+let draftMarker = null;
+let fallbackPins = new Map();
+let mapMarkers = new Map();
+
+const titles = {
+  intro: 'Start with one bike safety story.',
+  category: 'What kind of feedback is this?',
+  location: 'Place the pin on the map.',
+  details: 'Add the story behind the pin.',
+  review: 'Review mapped feedback.'
+};
+const steps = { intro: 1, category: 2, location: 3, details: 4, review: 4 };
+
+function allPins() {
+  return seeded.concat(saved);
+}
+
+function persist() {
+  localStorage.setItem(storageKey, JSON.stringify(saved));
+}
+
+function setScreen(next) {
+  screen = next;
+  document.querySelectorAll('.screen').forEach((node) => node.classList.toggle('active', node.dataset.screen === next));
+  document.getElementById('wizardTitle').textContent = titles[next];
+  document.getElementById('stepCount').textContent = `${steps[next]} / 4`;
+  document.getElementById('progressBar').style.width = `${steps[next] * 25}%`;
+  renderList();
+}
+
+function setNote(text) {
+  document.getElementById('note').textContent = text;
+}
+
+function clearDraftMarker() {
+  if (draftMarker && draftMarker.remove) draftMarker.remove();
+  if (draftMarker && draftMarker.parentNode) draftMarker.parentNode.removeChild(draftMarker);
+  draftMarker = null;
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]));
+}
+
+function popupHtml(pin) {
+  const photo = pin.photo ? `<img class="popup-photo" src="${pin.photo}" alt="">` : '';
+  return `<div class="popup-title">${escapeHtml(pin.title || pin.category)}</div>
+    <div class="popup-note">${escapeHtml(pin.note || 'No note added yet.')}</div>${photo}`;
+}
+
+function addFallbackPin(pin, isDraft = false) {
+  const wrap = document.querySelector('.map-wrap');
+  const marker = document.createElement('button');
+  marker.type = 'button';
+  marker.className = 'pin';
+  marker.title = pin.title || pin.category || 'Bike safety concern';
+  marker.style.left = `${pin.x || 50}%`;
+  marker.style.top = `${pin.y || 50}%`;
+  marker.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (!isDraft) editPin(pin.id);
+  });
+  wrap.appendChild(marker);
+  return marker;
+}
+
+function renderMarkers() {
+  mapMarkers.forEach((marker) => marker.remove());
+  mapMarkers.clear();
+  fallbackPins.forEach((marker) => marker.remove());
+  fallbackPins.clear();
+  if (map) {
+    allPins().forEach((pin) => {
+      const marker = new mapboxgl.Marker({ color: '#d93636' })
+        .setLngLat([pin.lng, pin.lat])
+        .setPopup(new mapboxgl.Popup().setHTML(popupHtml(pin)))
+        .addTo(map);
+      marker.getElement().addEventListener('click', () => setTimeout(() => editPin(pin.id), 0));
+      mapMarkers.set(pin.id, marker);
+    });
+  } else {
+    allPins().forEach((pin) => fallbackPins.set(pin.id, addFallbackPin(pin)));
+  }
+}
+
+function renderList() {
+  const list = document.getElementById('pinList');
+  if (!list) return;
+  if (!saved.length) {
+    list.innerHTML = '<div class="step"><strong>No new pins yet</strong>Seeded examples stay on the map. Add your own concern to build the workshop list.</div>';
+    return;
+  }
+  list.innerHTML = saved.map((pin) => `
+    <article class="pin-card">
+      <strong>${escapeHtml(pin.title || pin.category)}</strong>
+      <p>${escapeHtml(pin.category)}${pin.note ? ' - ' + escapeHtml(pin.note) : ''}</p>
+      ${pin.photo ? `<img src="${pin.photo}" alt="">` : ''}
+      <div class="pin-actions">
+        <button class="small-button" type="button" data-edit="${pin.id}">Edit</button>
+        <button class="small-button danger" type="button" data-delete="${pin.id}">Remove</button>
+      </div>
+    </article>
+  `).join('');
+}
+
+function beginNew() {
+  clearDraftMarker();
+  draft = {};
+  editingId = null;
+  mode = 'browse';
+  document.querySelectorAll('.choice').forEach((button) => button.classList.remove('selected'));
+  document.querySelector('[data-action="choose-location"]').disabled = true;
+  document.querySelector('[data-action="details"]').disabled = true;
+  document.getElementById('pinTitle').value = '';
+  document.getElementById('pinNote').value = '';
+  document.getElementById('pinPhoto').value = '';
+  document.getElementById('photoPreview').style.display = 'none';
+  setNote('Choose a category, then click the map to place the pin.');
+  setScreen('category');
+}
+
+function editPin(id) {
+  const pin = saved.find((item) => item.id === id);
+  if (!pin) return;
+  draft = { ...pin };
+  editingId = id;
+  mode = 'browse';
+  document.getElementById('activeCategory').textContent = pin.category;
+  document.getElementById('pinTitle').value = pin.title || '';
+  document.getElementById('pinNote').value = pin.note || '';
+  const preview = document.getElementById('photoPreview');
+  preview.src = pin.photo || '';
+  preview.style.display = pin.photo ? 'block' : 'none';
+  document.querySelector('[data-action="details"]').disabled = false;
+  setNote('Editing this pin. Update details, or go back to place it again.');
+  setScreen('details');
+}
+
+function removePin(id) {
+  saved = saved.filter((pin) => pin.id !== id);
+  persist();
+  renderMarkers();
+  renderList();
+  setNote('Pin removed from this browser.');
+}
+
+function placeDraft(lngLat, fallbackPoint) {
+  draft.lng = lngLat ? lngLat.lng : -117.1611;
+  draft.lat = lngLat ? lngLat.lat : 32.7157;
+  draft.x = fallbackPoint ? fallbackPoint.x : null;
+  draft.y = fallbackPoint ? fallbackPoint.y : null;
+  clearDraftMarker();
+  if (map && lngLat) {
+    draftMarker = new mapboxgl.Marker({ color: '#246bb2', draggable: true })
+      .setLngLat(lngLat)
+      .addTo(map);
+    draftMarker.on('dragend', () => {
+      const position = draftMarker.getLngLat();
+      draft.lng = position.lng;
+      draft.lat = position.lat;
+    });
+  } else {
+    draftMarker = addFallbackPin({ ...draft, title: 'Draft concern' }, true);
+  }
+  document.getElementById('locationStatus').textContent = 'Location selected. Continue to add details.';
+  document.querySelector('[data-action="details"]').disabled = false;
+  setNote('Location selected. Add the story, photo, and label next.');
+}
+
+function saveDraft() {
+  const title = document.getElementById('pinTitle').value.trim();
+  const note = document.getElementById('pinNote').value.trim();
+  const nextPin = {
+    ...draft,
+    id: editingId || `pin-${Date.now()}`,
+    title: title || draft.category,
+    note,
+    photo: draft.photo || ''
+  };
+  if (!nextPin.lng && !nextPin.x) {
+    setNote('Place the pin on the map before saving.');
+    setScreen('location');
+    return;
+  }
+  saved = editingId ? saved.map((pin) => pin.id === editingId ? nextPin : pin) : saved.concat([nextPin]);
+  persist();
+  clearDraftMarker();
+  renderMarkers();
+  setScreen('review');
+  setNote('Concern saved. Review it, edit it, or add another pin.');
+}
+
+function handleMapClick(event) {
+  if (mode !== 'place') return;
+  if (event.lngLat) placeDraft(event.lngLat, null);
+}
+
+document.querySelectorAll('[data-action]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const action = button.dataset.action;
+    if (action === 'start' || action === 'new') beginNew();
+    if (action === 'back') {
+      if (screen === 'category') setScreen('intro');
+      if (screen === 'location') setScreen('category');
+      if (screen === 'details') setScreen('location');
+    }
+    if (action === 'choose-location') {
+      mode = 'place';
+      document.getElementById('activeCategory').textContent = draft.category;
+      document.getElementById('locationStatus').textContent = 'Click the map to place this concern.';
+      setNote('Click the map where this concern happens.');
+      setScreen('location');
+    }
+    if (action === 'details') {
+      mode = 'browse';
+      setScreen('details');
+    }
+    if (action === 'save') saveDraft();
+    if (action === 'reset') {
+      saved = [];
+      persist();
+      clearDraftMarker();
+      renderMarkers();
+      setScreen('review');
+      setNote('Demo entries cleared. Seeded examples remain.');
+    }
+  });
+});
+
+document.getElementById('categoryList').addEventListener('click', (event) => {
+  const button = event.target.closest('.choice');
+  if (!button) return;
+  document.querySelectorAll('.choice').forEach((node) => node.classList.remove('selected'));
+  button.classList.add('selected');
+  draft.category = button.dataset.category;
+  document.querySelector('[data-action="choose-location"]').disabled = false;
+});
+
+document.getElementById('pinList').addEventListener('click', (event) => {
+  const editButton = event.target.closest('[data-edit]');
+  const deleteButton = event.target.closest('[data-delete]');
+  if (editButton) editPin(editButton.dataset.edit);
+  if (deleteButton) removePin(deleteButton.dataset.delete);
+});
+
+document.getElementById('pinPhoto').addEventListener('change', (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    draft.photo = reader.result;
+    const preview = document.getElementById('photoPreview');
+    preview.src = draft.photo;
+    preview.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+});
+
+if (token && window.mapboxgl) {
   mapboxgl.accessToken = token;
-  const map = new mapboxgl.Map({{
+  map = new mapboxgl.Map({
     container: 'map',
     style: 'mapbox://styles/mapbox/streets-v12',
     center: [-117.1611, 32.7157],
     zoom: 11.2
-  }});
-  map.addControl(new mapboxgl.NavigationControl({{ showCompass: false }}));
-  map.on('load', () => {{
-    pins.forEach(([lng, lat, label]) => new mapboxgl.Marker({{ color: '#d93636' }})
-      .setLngLat([lng, lat])
-      .setPopup(new mapboxgl.Popup().setText(label))
-      .addTo(map));
-  }});
-  map.on('click', (event) => {{
-    new mapboxgl.Marker({{ color: '#d93636' }}).setLngLat(event.lngLat).addTo(map);
-    savePin(event.lngLat);
-    document.getElementById('note').textContent = 'Concern added. Add another pin or use this map to discuss priorities.';
-  }});
-}} else {{
-  document.querySelector('.map-wrap').addEventListener('click', (event) => {{
+  });
+  map.addControl(new mapboxgl.NavigationControl({ showCompass: false }));
+  map.on('load', renderMarkers);
+  map.on('click', handleMapClick);
+} else {
+  document.querySelector('.map-wrap').addEventListener('click', (event) => {
+    if (mode !== 'place') return;
     const rect = event.currentTarget.getBoundingClientRect();
-    addFallbackPin(event.clientX - rect.left, event.clientY - rect.top);
-    document.getElementById('note').textContent = 'Concern added. Add another pin or use this map to discuss priorities.';
-  }});
-  [[62,48],[45,36],[72,62],[55,70]].forEach(([x,y]) => {{
-    const wrap = document.querySelector('.map-wrap');
-    addFallbackPin(wrap.clientWidth * x / 100, wrap.clientHeight * y / 100);
-  }});
-}}
-</script>""")
+    placeDraft(null, {
+      x: ((event.clientX - rect.left) / rect.width) * 100,
+      y: ((event.clientY - rect.top) / rect.height) * 100
+    });
+  });
+  seeded.forEach((pin, index) => {
+    const positions = [[62, 48], [45, 36], [72, 62], [55, 70]];
+    pin.x = positions[index][0];
+    pin.y = positions[index][1];
+  });
+  renderMarkers();
+}
+</script>"""
+    return _layout("Bike Better San Diego Survey", body.replace("__MAPBOX_TOKEN__", token_js))
 
 
 def app(environ, start_response):
