@@ -238,7 +238,6 @@ def _ai_insights(rows, fallback):
                 "content": json.dumps({"comments": compact_rows, "fallback_counts": fallback}, separators=(",", ":")),
             },
         ],
-        "response_format": {"type": "json_object"},
     }
     request = Request(
         "https://ai-gateway.vercel.sh/v1/chat/completions",
