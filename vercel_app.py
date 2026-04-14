@@ -19,6 +19,8 @@ BASE_DIR = Path(__file__).resolve().parent
 MAPBOX_TOKEN = os.environ.get("MAPBOX_ACCESS_TOKEN", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY", "")
+AI_GATEWAY_API_KEY = os.environ.get("AI_GATEWAY_API_KEY", "")
+AI_GATEWAY_MODEL = os.environ.get("AI_GATEWAY_MODEL", "openai/gpt-5.2")
 PIN_COLUMNS = "id,created_at,category,title,note,lng,lat,photo_data_url,status"
 
 
@@ -127,6 +129,152 @@ def _public_pin(pin):
         "lat": pin.get("lat"),
         "photo": pin.get("photo_data_url") or "",
     }
+
+
+def _sentiment_for_text(text):
+    lower = text.lower()
+    negative_terms = [
+        "unsafe", "danger", "dangerous", "near miss", "crash", "speed", "fast",
+        "blocked", "scary", "stress", "conflict", "poor", "missing", "dark",
+        "debris", "narrow", "hard", "avoid",
+    ]
+    positive_terms = ["safe", "protected", "comfortable", "easy", "better", "calm"]
+    score = sum(term in lower for term in positive_terms) - sum(term in lower for term in negative_terms)
+    if score <= -2:
+        return "negative"
+    if score >= 1:
+        return "positive"
+    return "mixed"
+
+
+def _keyword_themes(rows):
+    themes = {
+        "crossing safety": ["cross", "intersection", "turn", "signal", "visibility"],
+        "speed and traffic stress": ["speed", "fast", "traffic", "drivers", "cars"],
+        "network gaps": ["missing", "gap", "connection", "lane", "route"],
+        "maintenance": ["debris", "pavement", "sand", "drainage", "sign", "surface"],
+        "lighting and comfort": ["dark", "lighting", "night", "underpass", "comfort"],
+        "school and family access": ["school", "family", "kids", "children"],
+    }
+    text = " ".join(f"{row.get('category', '')} {row.get('title', '')} {row.get('note', '')}".lower() for row in rows)
+    scored = []
+    for theme, terms in themes.items():
+        count = sum(text.count(term) for term in terms)
+        if count:
+            scored.append({"theme": theme, "mentions": count})
+    return sorted(scored, key=lambda item: item["mentions"], reverse=True)[:5]
+
+
+def _fallback_insights(rows):
+    total = len(rows)
+    category_counts = {}
+    sentiment_counts = {"negative": 0, "mixed": 0, "positive": 0}
+    for row in rows:
+        category = row.get("category") or "Uncategorized"
+        category_counts[category] = category_counts.get(category, 0) + 1
+        sentiment_counts[_sentiment_for_text(f"{category} {row.get('title', '')} {row.get('note', '')}")] += 1
+
+    top_categories = [
+        {"label": label, "count": count}
+        for label, count in sorted(category_counts.items(), key=lambda item: item[1], reverse=True)[:6]
+    ]
+    themes = _keyword_themes(rows)
+    lead = "No public comments have been submitted yet."
+    if total:
+        top = top_categories[0]["label"]
+        lead = f"{total} active comments are on the map. The strongest signal is {top.lower()}, with recurring concerns around {themes[0]['theme'] if themes else 'bike access'}."
+    actions = []
+    if any(item["label"] == "Dangerous crossing" for item in top_categories):
+        actions.append("Prioritize crossing audits at clustered intersections and compare comments with crash and near-miss records.")
+    if any(item["label"] == "Missing bike connection" for item in top_categories):
+        actions.append("Package missing-link comments into corridor gap lists for capital planning discussions.")
+    if any(item["label"] == "Maintenance problem" for item in top_categories):
+        actions.append("Route maintenance-related comments to the appropriate city or county response channel.")
+    if not actions and total:
+        actions.append("Review high-detail comments first and group nearby pins into project-ready problem statements.")
+    if not actions:
+        actions.append("Collect the first round of comments, then refresh insights to surface themes and priorities.")
+
+    return {
+        "generated_by": "rules",
+        "summary": lead,
+        "total": total,
+        "sentiment": sentiment_counts,
+        "top_categories": top_categories,
+        "themes": themes,
+        "recommended_actions": actions[:4],
+    }
+
+
+def _ai_insights(rows, fallback):
+    if not AI_GATEWAY_API_KEY or not rows:
+        return fallback
+    compact_rows = [
+        {
+            "category": row.get("category"),
+            "title": row.get("title"),
+            "note": row.get("note"),
+            "lng": row.get("lng"),
+            "lat": row.get("lat"),
+        }
+        for row in rows[:300]
+    ]
+    body = {
+        "model": AI_GATEWAY_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You analyze public bike engagement comments for a county bicycle coalition. "
+                    "Return only compact JSON with keys summary, sentiment, themes, recommended_actions. "
+                    "Sentiment values must include negative, mixed, positive counts. Themes must be an array "
+                    "of objects with theme and mentions. Recommended actions must be concrete and suitable "
+                    "for advocacy or project planning."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps({"comments": compact_rows, "fallback_counts": fallback}, separators=(",", ":")),
+            },
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    request = Request(
+        "https://ai-gateway.vercel.sh/v1/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            content = payload["choices"][0]["message"]["content"]
+            ai = json.loads(content)
+            return {
+                **fallback,
+                "generated_by": "ai",
+                "summary": ai.get("summary") or fallback["summary"],
+                "sentiment": ai.get("sentiment") or fallback["sentiment"],
+                "themes": ai.get("themes") or fallback["themes"],
+                "recommended_actions": ai.get("recommended_actions") or fallback["recommended_actions"],
+            }
+    except Exception:
+        return fallback
+
+
+def _api_insights(start_response):
+    try:
+        rows = _supabase_request(
+            "GET",
+            f"sdbike_engagement_pins?select={PIN_COLUMNS}&status=eq.active&order=created_at.desc&limit=1000",
+        ) or []
+        fallback = _fallback_insights(rows)
+        return _json_response(start_response, "200 OK", _ai_insights(rows, fallback))
+    except RuntimeError:
+        return _json_response(start_response, "502 Bad Gateway", {"error": "The engagement database is temporarily unavailable."})
 
 
 def _api_pins(environ, start_response, path):
@@ -277,9 +425,9 @@ def _layout(title, body):
     .workspace {{ min-height: calc(100vh - 70px); display: grid; grid-template-columns: 380px minmax(0, 1fr); }}
     .panel {{ padding: 24px; border-right: 1px solid var(--line); background: white; overflow: auto; }}
     .panel h1 {{ font-size: 32px; line-height: 1.05; margin-bottom: 12px; }}
-    .wizard-top {{ display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: 16px 0; }}
+    .wizard-top {{ display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: 12px 0 18px; }}
     .progress {{ flex: 1; height: 8px; background: var(--soft); border-radius: 8px; overflow: hidden; }}
-    .progress span {{ display: block; height: 100%; width: 25%; background: var(--green); transition: width .2s ease; }}
+    .progress span {{ display: block; height: 100%; width: 33.333%; background: var(--green); transition: width .2s ease; }}
     .count {{ color: var(--muted); font-weight: 800; font-size: 13px; white-space: nowrap; }}
     .screen {{ display: none; }}
     .screen.active {{ display: block; }}
@@ -301,7 +449,7 @@ def _layout(title, body):
     .choice.selected {{ border-color: var(--green); box-shadow: inset 0 0 0 2px var(--green); }}
     .field {{ display: grid; gap: 7px; margin: 13px 0; }}
     .field label {{ font-weight: 800; }}
-    textarea, input[type="text"], input[type="file"] {{
+    textarea, input[type="text"], input[type="file"], select {{
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -310,6 +458,7 @@ def _layout(title, body):
       color: var(--ink);
       background: white;
     }}
+    select {{ min-height: 44px; }}
     textarea {{ min-height: 112px; resize: vertical; }}
     .row {{ display: flex; gap: 10px; flex-wrap: wrap; }}
     .row .button {{ flex: 1; min-width: 128px; }}
@@ -325,6 +474,15 @@ def _layout(title, body):
     .small-button {{ border: 1px solid var(--line); background: white; border-radius: 8px; padding: 7px 10px; cursor: pointer; font-weight: 800; }}
     .small-button.danger {{ color: #b42323; }}
     .status-pill {{ display: inline-flex; padding: 5px 8px; border-radius: 8px; background: var(--soft); color: var(--green); font-weight: 800; font-size: 12px; margin-bottom: 10px; }}
+    .insights {{ margin-top: 18px; border-top: 1px solid var(--line); padding-top: 16px; }}
+    .insights h2 {{ margin: 0 0 8px; font-size: 22px; line-height: 1.1; }}
+    .insight-summary {{ color: var(--muted); line-height: 1.4; margin: 0 0 12px; }}
+    .insight-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }}
+    .insight-stat {{ background: var(--soft); border-radius: 8px; padding: 9px; }}
+    .insight-stat strong {{ display: block; font-size: 20px; }}
+    .insight-list {{ display: grid; gap: 8px; margin: 10px 0; }}
+    .insight-item {{ border: 1px solid var(--line); border-radius: 8px; padding: 9px; background: white; font-weight: 700; }}
+    .insight-item span {{ display: block; color: var(--muted); font-weight: 600; margin-top: 3px; }}
     .map-wrap {{ position: relative; min-height: 720px; }}
     #map {{ position: absolute; inset: 0; background: #d9e9e4; }}
     .fallback-map {{
@@ -364,6 +522,40 @@ def _layout(title, body):
     .popup-title {{ font-weight: 800; margin-bottom: 4px; }}
     .popup-note {{ color: var(--muted); margin-bottom: 8px; }}
     .popup-photo {{ width: 220px; max-height: 120px; object-fit: cover; border-radius: 8px; display: block; }}
+    .modal-backdrop {{
+      position: fixed;
+      inset: 0;
+      background: rgba(23, 32, 28, .42);
+      z-index: 30;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+    }}
+    .modal-backdrop.open {{ display: flex; }}
+    .modal {{
+      width: min(560px, 100%);
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      background: white;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      box-shadow: 0 18px 60px rgba(0,0,0,.22);
+      padding: 22px;
+    }}
+    .modal-head {{ display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }}
+    .modal h2 {{ margin: 0; font-size: 28px; line-height: 1.05; letter-spacing: 0; }}
+    .icon-button {{
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: white;
+      cursor: pointer;
+      font-weight: 900;
+    }}
+    .modal .screen {{ margin-top: 14px; }}
+    .modal-footer {{ margin-top: 16px; }}
     @media (max-width: 780px) {{
       .hero, .workspace {{ grid-template-columns: 1fr; }}
       .hero {{ min-height: auto; }}
@@ -388,7 +580,7 @@ def _home():
     <div class="hero-copy">
       <div class="eyebrow">San Diego County Bicycle Coalition</div>
       <h1>Turn rider stories into safer streets.</h1>
-      <p class="lead">Collect safety concerns, missing links, route ideas, and everyday barriers in one public map built for community workshops and online input.</p>
+      <p class="lead">Bring participation tools, visual project pages, and built-in reporting together so community feedback becomes clear insight for better bike decisions.</p>
       <div class="actions">
         <a class="button" href="/survey">Launch the map</a>
         <a class="button secondary" href="https://sdbikecoalition.org/">Visit SDBC</a>
@@ -399,9 +591,9 @@ def _home():
   <section class="band">
     <div class="metrics">
       <div class="metric"><strong>Map</strong><span>locations that need safer bike access</span></div>
-      <div class="metric"><strong>Add</strong><span>notes and photos from the field</span></div>
-      <div class="metric"><strong>Review</strong><span>your own comments before sharing</span></div>
-      <div class="metric"><strong>Use</strong><span>public input for advocacy priorities</span></div>
+      <div class="metric"><strong>Talk</strong><span>support two-way community conversations</span></div>
+      <div class="metric"><strong>Report</strong><span>turn public input into usable insights</span></div>
+      <div class="metric"><strong>Act</strong><span>shape stronger project outcomes</span></div>
     </div>
   </section>
 </main>""")
@@ -417,37 +609,68 @@ def _survey():
 <main class="workspace">
   <aside class="panel">
     <div class="eyebrow">Map safety concerns</div>
-    <h1 id="wizardTitle">Start with one bike safety story.</h1>
-    <div class="wizard-top">
-      <div class="progress" aria-label="Survey progress"><span id="progressBar"></span></div>
-      <div class="count" id="stepCount">1 / 4</div>
+    <h1>Click the map to add a comment.</h1>
+    <p class="lead">Click the exact place where biking feels unsafe, unclear, or disconnected. Each comment helps shape better project decisions.</p>
+    <div class="step"><strong>1. Click the map</strong>A popup will open at that location.</div>
+    <div class="step"><strong>2. Add details</strong>Choose an issue type, add a note, and attach a photo if useful.</div>
+    <div class="step"><strong>3. Review your input</strong>You can edit or remove entries submitted from this browser.</div>
+    <section class="review-panel">
+      <span class="status-pill" id="savedStatus">Saved to the project map</span>
+      <p class="lead">Review your mapped comments. You can edit or remove entries submitted from this browser.</p>
+      <div class="pin-list" id="pinList"></div>
+    </section>
+    <section class="insights">
+      <span class="status-pill" id="insightSource">Live reporting</span>
+      <h2>Community insights</h2>
+      <p class="insight-summary" id="insightSummary">Loading patterns from public comments...</p>
+      <div class="insight-grid">
+        <div class="insight-stat"><strong id="insightTotal">0</strong><span>comments</span></div>
+        <div class="insight-stat"><strong id="insightNegative">0</strong><span>urgent</span></div>
+        <div class="insight-stat"><strong id="insightThemes">0</strong><span>themes</span></div>
+      </div>
+      <div class="insight-list" id="themeList"></div>
+      <div class="insight-list" id="actionList"></div>
+    </section>
+  </aside>
+  <section class="map-wrap">
+    <div id="map"><div class="fallback-map"></div></div>
+    <div class="map-note" id="note">Click the map to open the input form.</div>
+  </section>
+</main>
+<div class="modal-backdrop" id="pinModal" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-head">
+      <div>
+        <div class="eyebrow">Map input</div>
+        <h2 id="modalTitle">Add a bike safety comment.</h2>
+      </div>
+      <button class="icon-button" type="button" data-action="close-modal" aria-label="Close">x</button>
     </div>
-    <section class="screen active" data-screen="intro">
-      <p class="lead">Walk through a quick map survey, then review or remove what you added before sharing priorities.</p>
-      <div class="step"><strong>Step 1</strong>Pick the kind of feedback you want to leave.</div>
-      <div class="step"><strong>Step 2</strong>Click the map where it happens.</div>
-      <div class="step"><strong>Step 3</strong>Add a note and optional photo.</div>
-      <button class="button" type="button" data-action="start">Start survey</button>
-    </section>
-    <section class="screen" data-screen="category">
-      <p class="lead">Choose the issue that best fits this location.</p>
-      <div class="choice-list" id="categoryList">
-        <button class="choice" type="button" data-category="Dangerous crossing">Dangerous crossing<span>Hard to cross, poor visibility, or fast turning traffic.</span></button>
-        <button class="choice" type="button" data-category="Near miss">Near miss<span>A crash almost happened here.</span></button>
-        <button class="choice" type="button" data-category="Missing bike connection">Missing bike connection<span>A gap in the network keeps riders from using this route.</span></button>
-        <button class="choice" type="button" data-category="Maintenance problem">Maintenance problem<span>Pavement, debris, drainage, signs, or signal timing.</span></button>
+    <div class="wizard-top">
+      <div class="progress" aria-label="Input progress"><span id="progressBar"></span></div>
+      <div class="count" id="stepCount">1 / 3</div>
+    </div>
+    <section class="screen active" data-screen="type">
+      <p class="lead">What kind of issue is at this location?</p>
+      <div class="field">
+        <label for="issueType">Issue type</label>
+        <select id="issueType">
+          <option value="">Choose one</option>
+          <option value="Dangerous crossing">Dangerous crossing</option>
+          <option value="Near miss">Near miss</option>
+          <option value="Missing bike connection">Missing bike connection</option>
+          <option value="Maintenance problem">Maintenance problem</option>
+          <option value="Bike parking need">Bike parking need</option>
+          <option value="Other">Other</option>
+        </select>
       </div>
-      <div class="row">
-        <button class="button ghost" type="button" data-action="back">Back</button>
-        <button class="button" type="button" data-action="choose-location" disabled>Next: place pin</button>
+      <div class="field" id="otherTypeField" hidden>
+        <label for="otherType">Describe the issue type</label>
+        <input id="otherType" type="text" maxlength="80" placeholder="Example: Signal timing">
       </div>
-    </section>
-    <section class="screen" data-screen="location">
-      <p class="lead">Click the exact spot on the map. Drag the blue marker if you need to adjust it.</p>
-      <div class="step"><strong id="activeCategory">Safety concern</strong><span id="locationStatus">Waiting for a map click.</span></div>
-      <div class="row">
-        <button class="button ghost" type="button" data-action="back">Back</button>
-        <button class="button" type="button" data-action="details" disabled>Next: add details</button>
+      <div class="modal-footer row">
+        <button class="button ghost" type="button" data-action="close-modal">Cancel</button>
+        <button class="button" type="button" data-action="next-details">Next</button>
       </div>
     </section>
     <section class="screen" data-screen="details">
@@ -465,25 +688,22 @@ def _survey():
         <input id="pinPhoto" type="file" accept="image/*">
         <img class="photo-preview" id="photoPreview" alt="Selected photo preview">
       </div>
-      <div class="row">
-        <button class="button ghost" type="button" data-action="back">Back</button>
-        <button class="button" type="button" data-action="save">Save pin</button>
+      <div class="modal-footer row">
+        <button class="button ghost" type="button" data-action="back-type">Back</button>
+        <button class="button" type="button" data-action="next-review">Review</button>
       </div>
     </section>
-    <section class="screen" data-screen="review">
-      <span class="status-pill" id="savedStatus">Saved to the project map</span>
-      <p class="lead">Review your mapped comments. You can edit or remove entries submitted from this browser.</p>
-      <div class="pin-list" id="pinList"></div>
-      <div class="row">
-        <button class="button" type="button" data-action="new">Add another pin</button>
+    <section class="screen" data-screen="confirm">
+      <p class="lead">Review this comment before it appears on the public map.</p>
+      <div class="step"><strong id="confirmTitle">Safety comment</strong><span id="confirmBody">Ready to save.</span></div>
+      <img class="photo-preview" id="confirmPhoto" alt="Selected photo preview">
+      <div class="modal-footer row">
+        <button class="button ghost" type="button" data-action="back-details">Back</button>
+        <button class="button" type="button" data-action="save">Save to map</button>
       </div>
     </section>
-  </aside>
-  <section class="map-wrap">
-    <div id="map"><div class="fallback-map"></div></div>
-    <div class="map-note" id="note">Use the wizard to add a note, photo, and location.</div>
-  </section>
-</main>
+  </div>
+</div>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.10.0/mapbox-gl.js"></script>
 <script>
 const token = '__MAPBOX_TOKEN__';
@@ -499,8 +719,7 @@ if (!clientId) {
 }
 
 let map = null;
-let mode = 'browse';
-let screen = 'intro';
+let screen = 'type';
 let draft = {};
 let editingId = null;
 let draftMarker = null;
@@ -508,13 +727,11 @@ let fallbackPins = new Map();
 let mapMarkers = new Map();
 
 const titles = {
-  intro: 'Start with one bike safety story.',
-  category: 'What kind of feedback is this?',
-  location: 'Place the pin on the map.',
+  type: 'Add a bike safety comment.',
   details: 'Add the story behind the pin.',
-  review: 'Review mapped feedback.'
+  confirm: 'Review this comment.'
 };
-const steps = { intro: 1, category: 2, location: 3, details: 4, review: 4 };
+const steps = { type: 1, details: 2, confirm: 3 };
 
 function allPins() {
   return pins;
@@ -553,12 +770,31 @@ async function loadPins() {
   }
 }
 
+async function loadInsights() {
+  try {
+    const insights = await api('/api/insights');
+    document.getElementById('insightSource').textContent = insights.generated_by === 'ai' ? 'AI-powered insights' : 'Live reporting';
+    document.getElementById('insightSummary').textContent = insights.summary || 'No insights available yet.';
+    document.getElementById('insightTotal').textContent = insights.total || 0;
+    document.getElementById('insightNegative').textContent = insights.sentiment?.negative || 0;
+    document.getElementById('insightThemes').textContent = (insights.themes || []).length;
+    document.getElementById('themeList').innerHTML = (insights.themes || []).slice(0, 4).map((item) => `
+      <div class="insight-item">${escapeHtml(item.theme)}<span>${item.mentions || 0} signals</span></div>
+    `).join('') || '<div class="insight-item">No themes yet<span>Comments will appear here as they are submitted.</span></div>';
+    document.getElementById('actionList').innerHTML = (insights.recommended_actions || []).slice(0, 3).map((item) => `
+      <div class="insight-item">${escapeHtml(item)}</div>
+    `).join('');
+  } catch (error) {
+    document.getElementById('insightSummary').textContent = 'Insights are temporarily unavailable.';
+  }
+}
+
 function setScreen(next) {
   screen = next;
-  document.querySelectorAll('.screen').forEach((node) => node.classList.toggle('active', node.dataset.screen === next));
-  document.getElementById('wizardTitle').textContent = titles[next];
-  document.getElementById('stepCount').textContent = `${steps[next]} / 4`;
-  document.getElementById('progressBar').style.width = `${steps[next] * 25}%`;
+  document.querySelectorAll('#pinModal .screen').forEach((node) => node.classList.toggle('active', node.dataset.screen === next));
+  document.getElementById('modalTitle').textContent = titles[next];
+  document.getElementById('stepCount').textContent = `${steps[next]} / 3`;
+  document.getElementById('progressBar').style.width = `${steps[next] * 33.333}%`;
   renderList();
 }
 
@@ -570,6 +806,36 @@ function clearDraftMarker() {
   if (draftMarker && draftMarker.remove) draftMarker.remove();
   if (draftMarker && draftMarker.parentNode) draftMarker.parentNode.removeChild(draftMarker);
   draftMarker = null;
+}
+
+function openModal(next = 'type') {
+  document.getElementById('pinModal').classList.add('open');
+  document.getElementById('pinModal').setAttribute('aria-hidden', 'false');
+  setScreen(next);
+}
+
+function closeModal(options = {}) {
+  document.getElementById('pinModal').classList.remove('open');
+  document.getElementById('pinModal').setAttribute('aria-hidden', 'true');
+  if (!options.keepDraftMarker) clearDraftMarker();
+  editingId = null;
+}
+
+function selectedCategory() {
+  const value = document.getElementById('issueType').value;
+  if (value === 'Other') return document.getElementById('otherType').value.trim();
+  return value;
+}
+
+function resetForm() {
+  document.getElementById('issueType').value = '';
+  document.getElementById('otherType').value = '';
+  document.getElementById('otherTypeField').hidden = true;
+  document.getElementById('pinTitle').value = '';
+  document.getElementById('pinNote').value = '';
+  document.getElementById('pinPhoto').value = '';
+  document.getElementById('photoPreview').style.display = 'none';
+  document.getElementById('confirmPhoto').style.display = 'none';
 }
 
 function escapeHtml(value) {
@@ -646,20 +912,14 @@ function renderList() {
   `).join('');
 }
 
-function beginNew() {
+function beginNew(lngLat, fallbackPoint) {
   clearDraftMarker();
   draft = {};
   editingId = null;
-  mode = 'browse';
-  document.querySelectorAll('.choice').forEach((button) => button.classList.remove('selected'));
-  document.querySelector('[data-action="choose-location"]').disabled = true;
-  document.querySelector('[data-action="details"]').disabled = true;
-  document.getElementById('pinTitle').value = '';
-  document.getElementById('pinNote').value = '';
-  document.getElementById('pinPhoto').value = '';
-  document.getElementById('photoPreview').style.display = 'none';
-  setNote('Choose a category, then click the map to place the pin.');
-  setScreen('category');
+  resetForm();
+  placeDraft(lngLat, fallbackPoint);
+  setNote('Add details in the popup, then save the comment to the project map.');
+  openModal('type');
 }
 
 function editPin(id) {
@@ -667,16 +927,18 @@ function editPin(id) {
   if (!pin) return;
   draft = { ...pin };
   editingId = id;
-  mode = 'browse';
-  document.getElementById('activeCategory').textContent = pin.category;
+  resetForm();
+  const standard = [...document.getElementById('issueType').options].some((option) => option.value === pin.category);
+  document.getElementById('issueType').value = standard ? pin.category : 'Other';
+  document.getElementById('otherTypeField').hidden = standard;
+  document.getElementById('otherType').value = standard ? '' : pin.category;
   document.getElementById('pinTitle').value = pin.title || '';
   document.getElementById('pinNote').value = pin.note || '';
   const preview = document.getElementById('photoPreview');
   preview.src = pin.photo || '';
   preview.style.display = pin.photo ? 'block' : 'none';
-  document.querySelector('[data-action="details"]').disabled = false;
   setNote('Editing this pin. Update details, or go back to place it again.');
-  setScreen('details');
+  openModal('type');
 }
 
 async function removePin(id) {
@@ -690,6 +952,7 @@ async function removePin(id) {
     pins = pins.filter((pin) => pin.id !== id);
     renderMarkers();
     renderList();
+    loadInsights();
     setNote('Pin removed from the project map.');
   } catch (error) {
     setNote(error.message);
@@ -714,24 +977,48 @@ function placeDraft(lngLat, fallbackPoint) {
   } else {
     draftMarker = addFallbackPin({ ...draft, title: 'Draft concern' }, true);
   }
-  document.getElementById('locationStatus').textContent = 'Location selected. Continue to add details.';
-  document.querySelector('[data-action="details"]').disabled = false;
-  setNote('Location selected. Add the story, photo, and label next.');
+  setNote('Location selected. Complete the popup to save this comment.');
+}
+
+function prepareConfirm() {
+  const category = selectedCategory();
+  if (!category) {
+    setNote('Choose an issue type before continuing.');
+    setScreen('type');
+    return false;
+  }
+  const title = document.getElementById('pinTitle').value.trim() || category;
+  const note = document.getElementById('pinNote').value.trim();
+  draft.category = category;
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmBody').textContent = `${category}${note ? ' - ' + note : ''}`;
+  const confirmPhoto = document.getElementById('confirmPhoto');
+  confirmPhoto.src = draft.photo || '';
+  confirmPhoto.style.display = draft.photo ? 'block' : 'none';
+  setScreen('confirm');
+  return true;
 }
 
 async function saveDraft() {
   const title = document.getElementById('pinTitle').value.trim();
   const note = document.getElementById('pinNote').value.trim();
+  const category = selectedCategory();
   const nextPin = {
     ...draft,
-    title: title || draft.category,
+    category,
+    title: title || category,
     note,
     photo_data_url: draft.photo || '',
     client_id: clientId
   };
   if (!nextPin.lng && !nextPin.x) {
     setNote('Place the pin on the map before saving.');
-    setScreen('location');
+    closeModal();
+    return;
+  }
+  if (!category) {
+    setNote('Choose an issue type before saving.');
+    setScreen('type');
     return;
   }
   try {
@@ -744,7 +1031,9 @@ async function saveDraft() {
     pins = editingId ? pins.map((pin) => pin.id === editingId ? savedPin : pin) : [savedPin].concat(pins);
     clearDraftMarker();
     renderMarkers();
-    setScreen('review');
+    closeModal({ keepDraftMarker: true });
+    renderList();
+    loadInsights();
     setNote('Concern saved to the project map. Review it, edit it, or add another pin.');
   } catch (error) {
     setNote(error.message);
@@ -752,41 +1041,30 @@ async function saveDraft() {
 }
 
 function handleMapClick(event) {
-  if (mode !== 'place') return;
-  if (event.lngLat) placeDraft(event.lngLat, null);
+  if (document.getElementById('pinModal').classList.contains('open')) return;
+  if (event.lngLat) beginNew(event.lngLat, null);
 }
 
 document.querySelectorAll('[data-action]').forEach((button) => {
   button.addEventListener('click', () => {
     const action = button.dataset.action;
-    if (action === 'start' || action === 'new') beginNew();
-    if (action === 'back') {
-      if (screen === 'category') setScreen('intro');
-      if (screen === 'location') setScreen('category');
-      if (screen === 'details') setScreen('location');
-    }
-    if (action === 'choose-location') {
-      mode = 'place';
-      document.getElementById('activeCategory').textContent = draft.category;
-      document.getElementById('locationStatus').textContent = 'Click the map to place this concern.';
-      setNote('Click the map where this concern happens.');
-      setScreen('location');
-    }
-    if (action === 'details') {
-      mode = 'browse';
+    if (action === 'close-modal') closeModal();
+    if (action === 'next-details') {
+      if (!selectedCategory()) {
+        setNote('Choose an issue type before continuing.');
+        return;
+      }
       setScreen('details');
     }
+    if (action === 'back-type') setScreen('type');
+    if (action === 'next-review') prepareConfirm();
+    if (action === 'back-details') setScreen('details');
     if (action === 'save') saveDraft();
   });
 });
 
-document.getElementById('categoryList').addEventListener('click', (event) => {
-  const button = event.target.closest('.choice');
-  if (!button) return;
-  document.querySelectorAll('.choice').forEach((node) => node.classList.remove('selected'));
-  button.classList.add('selected');
-  draft.category = button.dataset.category;
-  document.querySelector('[data-action="choose-location"]').disabled = false;
+document.getElementById('issueType').addEventListener('change', (event) => {
+  document.getElementById('otherTypeField').hidden = event.target.value !== 'Other';
 });
 
 document.getElementById('pinList').addEventListener('click', (event) => {
@@ -845,9 +1123,9 @@ if (token && window.mapboxgl) {
   map.on('click', handleMapClick);
 } else {
   document.querySelector('.map-wrap').addEventListener('click', (event) => {
-    if (mode !== 'place') return;
+    if (document.getElementById('pinModal').classList.contains('open')) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    placeDraft(null, {
+    beginNew(null, {
       x: ((event.clientX - rect.left) / rect.width) * 100,
       y: ((event.clientY - rect.top) / rect.height) * 100
     });
@@ -855,6 +1133,7 @@ if (token && window.mapboxgl) {
 }
 setNote('Loading public comments...');
 loadPins();
+loadInsights();
 </script>"""
     return _layout("Bike Better San Diego Survey", body.replace("__MAPBOX_TOKEN__", token_js))
 
@@ -863,6 +1142,8 @@ def app(environ, start_response):
     path = environ.get("PATH_INFO", "/")
     query = parse_qs(environ.get("QUERY_STRING", ""))
 
+    if path == "/api/insights":
+        return _api_insights(start_response)
     if path == "/api/pins" or path.startswith("/api/pins/"):
         return _api_pins(environ, start_response, path)
     if path == "/favicon.ico":
