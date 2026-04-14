@@ -1,0 +1,148 @@
+{% load static i18n %}
+<!DOCTYPE html>
+<html lang="{{ LANGUAGE_CODE|default:'en' }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{% trans "Ride San Diego Engagement Hub" %}{% endblock %}</title>
+    {% include "partials/_analytics.html" %}
+    <link rel="icon" href="{% static 'favicon.ico' %}" sizes="any">
+    <link rel="icon" href="{% static 'favicon-32x32.png' %}" type="image/png" sizes="32x32">
+    <link rel="apple-touch-icon" href="{% static 'favicon-180x180.png' %}">
+    <link rel="manifest" href="{% static 'manifest.json' %}">
+
+    {# SEO Meta #}
+    <meta name="theme-color" content="#0FA58E">
+    <meta name="description" content="{% block meta_description %}{% trans "Map routes, safety concerns, bikeway gaps, and community priorities across San Diego County." %}{% endblock %}">
+    <meta name="keywords" content="{% block meta_keywords %}bike advocacy, San Diego, participatory mapping, map survey, safe streets, Vision Zero, community engagement{% endblock %}">
+    <link rel="canonical" href="{% block canonical_url %}https://mapsurvey-demo.onrender.com/{% endblock %}">
+
+    {# Open Graph #}
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="{% block og_url %}https://mapsurvey-demo.onrender.com/{% endblock %}">
+    <meta property="og:title" content="{% block og_title %}{% trans "Ride San Diego Engagement Hub" %}{% endblock %}">
+    <meta property="og:description" content="{% trans "Map safer routes, dangerous crossings, missing bikeway links, and bike parking needs." %}">
+    <meta property="og:image" content="{% static 'favicon-512x512.png' %}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{% trans "Ride San Diego Engagement Hub" %}">
+    <meta name="twitter:description" content="{% trans "Map safer routes, dangerous crossings, missing bikeway links, and bike parking needs." %}">
+
+    {# Schema.org #}
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Ride San Diego Engagement Hub",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, Docker",
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD",
+            "description": "Free self-hosted version"
+        },
+        "description": "Open-source geospatial engagement platform for bike advocacy",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "codeRepository": "{{ GITHUB_REPO_URL }}"
+    }
+    </script>
+
+    {# Fonts #}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'css/landing.css' %}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="landing-body">
+    <nav class="landing-nav" id="main-nav">
+        <a href="/" class="landing-nav__brand">
+            <img class="landing-nav__logo" src="{% static 'favicon-32x32.png' %}" width="22" height="22" alt="" aria-hidden="true">
+            Ride San Diego
+        </a>
+        <button class="landing-nav__toggle" aria-label="{% trans "Toggle navigation" %}" aria-expanded="false"
+                onclick="this.setAttribute('aria-expanded', this.getAttribute('aria-expanded')==='false'); this.classList.toggle('is-active'); document.getElementById('nav-links').classList.toggle('is-open')">
+            <span></span><span></span><span></span>
+        </button>
+        <ul class="landing-nav__links" id="nav-links">
+            <li><a href="/#start">{% trans "Survey" %}</a></li>
+            <li><a href="/#dashboard">{% trans "Campaign Board" %}</a></li>
+            <li><a href="{% url 'trust_page' %}">{% trans "Trust" %}</a></li>
+            {% comment "Language switcher — disabled until RU translations are complete" %}
+            <li class="landing-nav__lang">
+                {% get_current_language as LANGUAGE_CODE %}
+                <form action="{% url 'set_language' %}" method="post" class="lang-switch">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{{ request.path }}">
+                    {% if LANGUAGE_CODE == 'ru' %}
+                    <button type="submit" name="language" value="en" class="lang-switch__btn" title="Switch to English">EN</button>
+                    <span class="lang-switch__current">RU</span>
+                    {% else %}
+                    <span class="lang-switch__current">EN</span>
+                    <button type="submit" name="language" value="ru" class="lang-switch__btn" title="Переключить на русский">RU</button>
+                    {% endif %}
+                </form>
+            </li>
+            {% endcomment %}
+            <li><span class="nav-sep"></span></li>
+            {% if user.is_authenticated %}
+                <li><a href="{% url 'editor' %}" class="btn-nav-action">{% trans "Dashboard" %}</a></li>
+                <li><a href="{% url 'logout' %}">{% trans "Logout" %}</a></li>
+            {% else %}
+                <li><a href="{% url 'login' %}" class="btn-nav-action">{% trans "Staff Dashboard" %}</a></li>
+            {% endif %}
+        </ul>
+    </nav>
+
+    {% block content %}{% endblock %}
+
+    <footer class="landing-footer">
+        <div class="landing-footer__inner">
+            <div class="landing-footer__col">
+                <div class="landing-footer__brand">Ride San Diego</div>
+                <p class="landing-footer__tagline">{% trans "A Mapsurvey-powered engagement demo for safer biking." %}</p>
+            </div>
+            <div class="landing-footer__col">
+                <div class="landing-footer__col-title">{% trans "Campaign" %}</div>
+                <ul class="landing-footer__links">
+                    <li><a href="/#start">{% trans "Survey" %}</a></li>
+                    <li><a href="/#dashboard">{% trans "Campaign Board" %}</a></li>
+                </ul>
+            </div>
+            {% if GITHUB_REPO_URL %}
+            <div class="landing-footer__col">
+                <div class="landing-footer__col-title">{% trans "Open Source" %}</div>
+                <ul class="landing-footer__links">
+                    <li><a href="{{ GITHUB_REPO_URL }}" target="_blank" rel="noopener">Demo GitHub</a></li>
+                </ul>
+            </div>
+            {% endif %}
+            <div class="landing-footer__col">
+                <div class="landing-footer__col-title">{% trans "Legal" %}</div>
+                <ul class="landing-footer__links">
+                    <li><a href="{% url 'trust_page' %}">{% trans "Trust & Security" %}</a></li>
+                </ul>
+            </div>
+            <div class="landing-footer__col">
+                <div class="landing-footer__col-title">{% trans "Connect" %}</div>
+                <ul class="landing-footer__links">
+                    {% if CONTACT_EMAIL %}
+                    <li><a href="mailto:{{ CONTACT_EMAIL }}">{% trans "Email" %}</a></li>
+                    {% endif %}
+                    {% if CONTACT_TELEGRAM %}
+                    <li><a href="https://t.me/{{ CONTACT_TELEGRAM }}" target="_blank" rel="noopener">Telegram</a></li>
+                    {% endif %}
+                    {% if GITHUB_REPO_URL %}
+                    <li><a href="{{ GITHUB_REPO_URL }}" target="_blank" rel="noopener">GitHub</a></li>
+                    {% endif %}
+                </ul>
+            </div>
+            <div class="landing-footer__bottom">
+                <div class="landing-footer__license">{% blocktrans %}Mapsurvey is open-source software licensed under <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">AGPLv3</a>{% endblocktrans %}</div>
+                <div class="landing-footer__copy">&copy; {% now "Y" %} Mapsurvey</div>
+            </div>
+        </div>
+    </footer>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

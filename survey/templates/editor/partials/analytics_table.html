@@ -1,0 +1,701 @@
+{% load tz hash survey_filters %}
+{# HTMX-swappable partial: attribute table with toolbar, sort, search, pagination #}
+<style>
+.cell-editable { cursor: text; }
+.cell-editable:hover { background: #f0f4ff; border-radius: 2px; }
+.attr-th-filter { cursor: pointer; padding: 0 2px; }
+.attr-th-filter:hover i { opacity: 0.8 !important; }
+.attr-th-filter.active i { opacity: 1 !important; color: #1a56db !important; }
+/* Freeze checkbox and actions columns */
+.attr-table th:nth-child(1), .attr-table td:nth-child(1) { position: sticky; left: 0; z-index: 2; background: #fff; }
+.attr-table th:nth-child(2), .attr-table td:nth-child(2) { position: sticky; left: 28px; z-index: 2; background: #fff; }
+.attr-table thead th:nth-child(1), .attr-table thead th:nth-child(2) { z-index: 3; }
+.table-secondary td:nth-child(1), .table-secondary td:nth-child(2) { background: #e2e3e5 !important; }
+</style>
+<script type="application/json" id="anomaly-counts-data">{{ anomaly_counts_json|safe }}</script>
+<script type="application/json" id="unique-values-data">{{ unique_values_json|safe }}</script>
+<script type="application/json" id="col-filters-data">{{ col_filters_json|safe }}</script>
+<script type="text/plain" id="active-issues-filter">{{ issues_filter }}</script>
+
+{# Normal toolbar — visible when no rows selected #}
+<div class="attr-table-toolbar" id="toolbar-normal">
+    <div class="attr-table-toolbar-left">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleHideFieldsPopover()" title="Show/hide columns">
+            <i class="fas fa-columns"></i> Hide fields
+        </button>
+        {% if is_editor %}
+        <button type="button" id="trash-toggle-btn"
+                class="btn btn-sm {% if show_trash %}btn-warning{% else %}btn-outline-secondary{% endif %}"
+                onclick="toggleShowTrash()" title="Show/hide trash">
+            <i class="fas fa-trash-alt"></i> Trash
+        </button>
+        {% endif %}
+        <select class="form-control form-control-sm d-inline-block ml-2"
+                style="width:auto;font-size:0.82rem;height:28px;"
+                onchange="changeIssuesFilter(this.value)">
+            <option value="" {% if not issues_filter %}selected{% endif %}>All sessions</option>
+            <option value="empty" {% if issues_filter == 'empty' %}selected{% endif %}>Empty</option>
+            <option value="incomplete" {% if issues_filter == 'incomplete' %}selected{% endif %}>Incomplete</option>
+            <option value="missing_required" {% if issues_filter == 'missing_required' %}selected{% endif %}>Missing required</option>
+            <option value="fast" {% if issues_filter == 'fast' %}selected{% endif %}>Fast completion</option>
+            <option value="duplicate" {% if issues_filter == 'duplicate' %}selected{% endif %}>Duplicate</option>
+            <option value="has_errors" {% if issues_filter == 'has_errors' %}selected{% endif %}>Has answer errors</option>
+            <option value="has_warnings" {% if issues_filter == 'has_warnings' %}selected{% endif %}>Has answer warnings</option>
+        </select>
+        <span class="text-muted ml-2" style="font-size:0.85rem;">
+            {{ total }} {% if show_trash %}trashed{% else %}result{{ total|pluralize }}{% endif %}
+        </span>
+        {% for f in issues_filter_list %}
+        <span class="badge badge-pill" style="background:#e8f0fe;color:#1a56db;font-size:0.78rem;font-weight:500;margin-left:0.25rem;">
+            {{ f }}
+            <button type="button" style="border:none;background:none;color:#1a56db;font-size:0.85rem;padding:0 0 0 4px;cursor:pointer;line-height:1;"
+                    onclick="toggleIssueFilter('{{ f }}')" title="Remove filter">&times;</button>
+        </span>
+        {% endfor %}
+        {% if issues_filter_list %}
+        <button type="button" class="btn btn-sm btn-link p-0 ml-1" style="font-size:0.75rem;color:#6b7280;" onclick="changeIssuesFilter('')">Clear all</button>
+        {% endif %}
+        <button type="button" id="show-all-rows-btn" class="btn btn-sm btn-link p-0 ml-2" style="font-size:0.75rem;color:#6b7280;display:none;" onclick="filterManager.showAll()">
+            <i class="fas fa-eye"></i> Show hidden
+        </button>
+    </div>
+    <div class="attr-table-toolbar-right">
+        {% if is_editor %}
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="openValidationSettings()" title="Validation settings">
+            <i class="fas fa-cog"></i>
+        </button>
+        {% endif %}
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleTableFullscreen()" title="Toggle fullscreen">
+            <i class="fas fa-expand"></i>
+        </button>
+    </div>
+</div>
+{# Bulk toolbar — visible when rows are selected #}
+{% if is_editor %}
+<div class="attr-table-toolbar" id="toolbar-bulk" style="display:none;background:#e8f0fe;border-radius:4px;">
+    <div class="attr-table-toolbar-left" style="gap:0.5rem;">
+        <button type="button" class="btn btn-sm btn-link" onclick="clearSelection()" title="Deselect all" style="padding:0;">
+            <i class="fas fa-times"></i>
+        </button>
+        <span style="font-size:0.85rem;font-weight:600;" id="bulk-count">0 selected</span>
+        <div class="btn-group ml-2">
+            <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-toggle="dropdown">
+                <i class="fas fa-check-circle"></i> Status
+            </button>
+            <div class="dropdown-menu">
+                <a class="dropdown-item" href="#" onclick="bulkSetStatus(''); return false;">— No status</a>
+                <a class="dropdown-item" href="#" onclick="bulkSetStatus('approved'); return false;">Approved</a>
+                <a class="dropdown-item" href="#" onclick="bulkSetStatus('not_approved'); return false;">Not approved</a>
+                <a class="dropdown-item" href="#" onclick="bulkSetStatus('on_hold'); return false;">On hold</a>
+            </div>
+        </div>
+        {% if show_trash %}
+        <button type="button" class="btn btn-sm btn-outline-success" onclick="bulkRestore()">
+            <i class="fas fa-undo"></i> Restore
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-danger" onclick="bulkHardDelete()">
+            <i class="fas fa-times-circle"></i> Delete permanently
+        </button>
+        {% else %}
+        <button type="button" class="btn btn-sm btn-outline-danger" onclick="bulkTrash()">
+            <i class="fas fa-trash-alt"></i> Trash
+        </button>
+        {% endif %}
+        <span style="border-left:1px solid #bfdbfe;height:20px;margin:0 4px;"></span>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="filterManager.hideSelected()" title="Hide selected rows">
+            <i class="fas fa-eye-slash"></i> Hide
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="filterManager.keepOnlySelected()" title="Keep only selected, hide rest">
+            <i class="fas fa-filter"></i> Keep only
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="selectionManager.invert()" title="Invert selection">
+            <i class="fas fa-exchange-alt"></i> Invert
+        </button>
+    </div>
+</div>
+{% endif %}
+
+{# Hidden state form — carries current state for HTMX requests #}
+<form id="table-state-form">
+    <input type="hidden" name="filters" value="">
+    <input type="hidden" name="sort" value="{{ sort_col }}">
+    <input type="hidden" name="dir" value="{{ sort_dir }}">
+    <input type="hidden" name="page" value="{{ page }}">
+    <input type="hidden" name="page_size" value="{{ page_size }}">
+    <input type="hidden" name="trash" value="{% if show_trash %}1{% else %}0{% endif %}">
+    <input type="hidden" name="issues" value="{{ issues_filter }}">
+    {% for key, val in col_search.items %}
+    <input type="hidden" name="search_{{ key }}" value="{{ val }}">
+    {% endfor %}
+    {% for key, val in col_filters_params.items %}
+    <input type="hidden" name="{{ key }}" value="{{ val }}">
+    {% endfor %}
+</form>
+
+{# Hide fields popover #}
+<div id="hide-fields-popover" style="display:none;" class="attr-hide-popover">
+    <div style="font-weight:600;margin-bottom:0.5rem;font-size:0.85rem;">Visible columns</div>
+    {% for col in columns %}
+    <label style="display:block;font-size:0.82rem;cursor:pointer;padding:2px 0;">
+        <input type="checkbox" checked data-hide-col="{{ col.key }}"
+               onchange="setColHidden('{{ col.key }}', !this.checked)">
+        {% if col.input_type == 'point' %}<i class="fas fa-map-marker-alt" style="color:#1E88E5;width:16px;"></i>
+        {% elif col.input_type == 'line' %}<i class="fas fa-route" style="color:#43A047;width:16px;"></i>
+        {% elif col.input_type == 'polygon' %}<i class="fas fa-draw-polygon" style="color:#8E24AA;width:16px;"></i>
+        {% elif col.input_type == 'number' or col.input_type == 'range' %}<i class="fas fa-hashtag" style="color:#FB8C00;width:16px;"></i>
+        {% elif col.input_type == 'choice' or col.input_type == 'multichoice' or col.input_type == 'rating' %}<i class="fas fa-list" style="color:#00897B;width:16px;"></i>
+        {% elif col.input_type == 'datetime' %}<i class="fas fa-clock" style="color:#6b7280;width:16px;"></i>
+        {% elif col.input_type == 'text' or col.input_type == 'text_line' %}<i class="fas fa-font" style="color:#6b7280;width:16px;"></i>
+        {% elif col.input_type is None %}<i class="fas fa-cog" style="color:#9e9e9e;width:16px;"></i>
+        {% endif %}
+        {{ col.label|truncatechars:30 }}
+    </label>
+    {% endfor %}
+</div>
+
+<div class="attr-table-wrapper" style="flex:1;min-height:0;overflow:auto;">
+<table class="table table-sm table-bordered table-hover attr-table">
+<thead>
+    {# Header row with column names + sort + menu #}
+    <tr>
+        <th style="width:28px;text-align:center;background:#f8f9fa;">
+            <input type="checkbox" id="select-all-cb" title="Select / deselect all"
+                   onchange="toggleSelectAll(this.checked)">
+        </th>
+        <th class="attr-th-actions" style="width:56px;"></th>
+        {% for col in columns %}
+        <th data-col="{{ col.key }}" class="attr-th">
+            <div class="attr-th-content">
+                <span class="attr-th-grip" title="Drag to reorder"><i class="fas fa-grip-vertical"></i></span>
+                <span class="attr-th-label">
+                    {% if col.input_type == 'point' %}<i class="fas fa-map-marker-alt" style="color:#1E88E5;"></i>
+                    {% elif col.input_type == 'line' %}<i class="fas fa-route" style="color:#43A047;"></i>
+                    {% elif col.input_type == 'polygon' %}<i class="fas fa-draw-polygon" style="color:#8E24AA;"></i>
+                    {% elif col.input_type == 'number' or col.input_type == 'range' %}<i class="fas fa-hashtag" style="color:#FB8C00;"></i>
+                    {% elif col.input_type == 'choice' or col.input_type == 'multichoice' or col.input_type == 'rating' %}<i class="fas fa-list" style="color:#00897B;"></i>
+                    {% elif col.input_type == 'datetime' %}<i class="fas fa-clock" style="color:#6b7280;"></i>
+                    {% elif col.input_type == 'text' or col.input_type == 'text_line' %}<i class="fas fa-font" style="color:#6b7280;"></i>
+                    {% endif %}
+                    {{ col.label|truncatechars:25 }}
+                </span>
+                <span class="attr-th-sort"
+                      onclick="tableSort('{{ col.key }}')"
+                      title="Sort">
+                    {% if sort_col == col.key and sort_dir == 'asc' %}
+                    <i class="fas fa-sort-up"></i>
+                    {% elif sort_col == col.key and sort_dir == 'desc' %}
+                    <i class="fas fa-sort-down"></i>
+                    {% else %}
+                    <i class="fas fa-sort" style="opacity:0.3;"></i>
+                    {% endif %}
+                </span>
+                <span class="attr-th-filter" onclick="openColFilter(event, '{{ col.key }}', '{{ col.input_type }}')" title="Filter">
+                    <i class="fas fa-filter" style="opacity:0.3;font-size:0.65rem;"></i>
+                </span>
+                <span class="attr-th-menu" onclick="toggleColMenu(this, '{{ col.key }}')" title="Column options">
+                    <i class="fas fa-ellipsis-v" style="opacity:0.4;"></i>
+                </span>
+            </div>
+        </th>
+        {% endfor %}
+    </tr>
+    {# Filter indicator row #}
+    <tr class="attr-filter-row" style="font-size:0.7rem;">
+        <td></td>
+        <td></td>
+        {% for col in columns %}
+        <td data-col="{{ col.key }}" class="attr-filter-indicator" data-filter-col="{{ col.key }}"
+            style="padding:1px 4px;color:#6b7280;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+            onclick="openColFilter(event, '{{ col.key }}', '{{ col.input_type }}')">
+        </td>
+        {% endfor %}
+    </tr>
+</thead>
+<tbody>
+    {% for row in rows %}
+    <tr {% if row.is_deleted %}class="table-secondary"{% endif %}>
+        <td style="text-align:center;width:28px;">
+            <input type="checkbox" class="row-select-cb" data-session-id="{{ row.session_id }}">
+        </td>
+        <td class="attr-td-actions">
+            <button type="button" class="btn btn-sm btn-link p-0" onclick="loadSessionDetail({{ row.session_id }})" title="View details">
+                <i class="fas fa-eye" style="color:var(--accent);"></i>
+            </button>
+            {% if is_editor %}
+            {% if row.is_deleted %}
+            <button type="button" class="btn btn-sm btn-link p-0" onclick="restoreSession({{ row.session_id }})" title="Restore">
+                <i class="fas fa-undo" style="color:#28a745;"></i>
+            </button>
+            <button type="button" class="btn btn-sm btn-link p-0" onclick="hardDeleteSession({{ row.session_id }})" title="Delete permanently">
+                <i class="fas fa-times-circle" style="color:#dc3545;"></i>
+            </button>
+            {% else %}
+            <button type="button" class="btn btn-sm btn-link p-0" onclick="trashSession({{ row.session_id }})" title="Move to trash">
+                <i class="fas fa-trash-alt" style="color:#9ca3af;"></i>
+            </button>
+            {% endif %}
+            {% endif %}
+        </td>
+        {% for col in columns %}
+        <td data-col="{{ col.key }}">
+            {% if col.key == 'id' %}#{{ row.id }}
+            {% elif col.key == 'validation_status' %}
+                {% if is_editor and not row.is_deleted %}
+                <select class="form-control form-control-sm validation-select"
+                        data-session-id="{{ row.session_id }}"
+                        style="font-size:0.75rem;padding:1px 4px;height:24px;width:auto;min-width:90px;{% if row.validation_status == 'approved' %}border-color:#28a745;color:#28a745;{% elif row.validation_status == 'not_approved' %}border-color:#dc3545;color:#dc3545;{% elif row.validation_status == 'on_hold' %}border-color:#fd7e14;color:#fd7e14;{% endif %}"
+                        onchange="setSessionStatus(this, {{ row.session_id }})">
+                    <option value="" {% if not row.validation_status %}selected{% endif %}>—</option>
+                    <option value="approved" {% if row.validation_status == 'approved' %}selected{% endif %}>Approved</option>
+                    <option value="not_approved" {% if row.validation_status == 'not_approved' %}selected{% endif %}>Not approved</option>
+                    <option value="on_hold" {% if row.validation_status == 'on_hold' %}selected{% endif %}>On hold</option>
+                </select>
+                {% else %}
+                    {% if row.validation_status == 'approved' %}<span class="badge badge-success">Approved</span>
+                    {% elif row.validation_status == 'not_approved' %}<span class="badge badge-danger">Not approved</span>
+                    {% elif row.validation_status == 'on_hold' %}<span class="badge badge-warning">On hold</span>
+                    {% else %}—{% endif %}
+                {% endif %}
+            {% elif col.key == 'issues' %}
+                {% for issue in row.issues %}
+                    {% if issue == 'empty' %}<span class="badge badge-dark" style="font-size:0.7rem;cursor:help;" title="Session has 0 answers">Empty</span>
+                    {% elif issue == 'incomplete' %}<span class="badge badge-warning text-dark" style="font-size:0.7rem;cursor:help;" title="Session did not reach the last section">Incomplete</span>
+                    {% elif issue == 'missing_required' %}<span class="badge badge-danger" style="font-size:0.7rem;cursor:help;" title="Required question was skipped in a visited section">Missing req.</span>
+                    {% elif issue == 'fast' %}<span class="badge badge-info" style="font-size:0.7rem;cursor:help;" title="Session completed suspiciously fast">Fast</span>
+                    {% elif issue == 'duplicate' %}<span class="badge badge-secondary" style="font-size:0.7rem;cursor:help;" title="Same browser submitted multiple sessions within the detection window">Duplicate</span>
+                    {% endif %}
+                {% empty %}
+                    <span style="color:#9ca3af;">—</span>
+                {% endfor %}
+            {% elif col.key == 'tags' %}
+                {% for tag in row.tags %}
+                    <span class="badge badge-info" style="font-size:0.7rem;font-weight:normal;">{{ tag }}</span>
+                {% empty %}
+                    <span style="color:#9ca3af;">—</span>
+                {% endfor %}
+            {% elif col.key == 'start_datetime' %}{{ row.start_datetime|date:"M j, Y H:i" }}
+            {% elif col.key == 'language' %}{{ row.language }}
+            {% else %}
+                {% with cell_lints=row.lints|hash:col.key %}
+                {% with has_error=cell_lints|join:','|truncatechars:1 %}
+                <span class="cell-display{% if is_editor %} cell-editable{% endif %}"
+                      {% if is_editor %}ondblclick="startCellEdit(this, {{ row.session_id }}, '{{ col.key }}', '{{ col.input_type }}', '{{ col.choices_json|escapejs }}')"{% endif %}
+                      {% if cell_lints %}title="{{ cell_lints|lint_tooltip }}" style="background:{% if 'self_intersection' in cell_lints or 'empty_required' in cell_lints or 'out_of_range' in cell_lints %}#fff5f5{% else %}#fffbeb{% endif %};display:inline-flex;align-items:center;gap:3px;padding:0 3px;border-radius:3px;border:1px solid {% if 'self_intersection' in cell_lints or 'empty_required' in cell_lints or 'out_of_range' in cell_lints %}#fecaca{% else %}#fde68a{% endif %};cursor:help;"{% endif %}>
+                    {% if cell_lints %}{% if 'self_intersection' in cell_lints or 'empty_required' in cell_lints or 'out_of_range' in cell_lints %}<i class="fas fa-exclamation-circle" style="color:#dc3545;font-size:0.7rem;"></i>{% else %}<i class="fas fa-exclamation-triangle" style="color:#f59e0b;font-size:0.7rem;"></i>{% endif %}{% endif %}
+                {% endwith %}
+                    {% with cell_val=row.cells|hash:col.key %}{{ cell_val|default:"—" }}{% endwith %}
+                </span>
+                {% endwith %}
+            {% endif %}
+        </td>
+        {% endfor %}
+    </tr>
+    {% empty %}
+    <tr>
+        <td colspan="{{ columns|length|add:2 }}" class="text-center text-muted py-4">
+            {% if show_trash %}No trashed sessions{% elif col_search %}No responses matching your search{% else %}No responses{% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+</tbody>
+</table>
+</div>
+
+{# Pagination #}
+<div class="attr-pagination" style="flex-shrink:0;padding-right:70px;">
+    {% if total_pages > 1 %}
+    <button class="btn btn-sm btn-outline-secondary"
+            {% if page <= 1 %}disabled{% endif %}
+            onclick="tablePage({{ page|add:'-1' }})">
+        <i class="fas fa-chevron-left"></i> Prev
+    </button>
+    <span class="text-muted mx-2" style="font-size:0.85rem;">Page {{ page }} of {{ total_pages }}</span>
+    <button class="btn btn-sm btn-outline-secondary"
+            {% if page >= total_pages %}disabled{% endif %}
+            onclick="tablePage({{ page|add:'1' }})">
+        Next <i class="fas fa-chevron-right"></i>
+    </button>
+    {% endif %}
+    <span class="ml-auto" style="font-size:0.82rem;">
+        <label class="text-muted mb-0">Rows:
+            <select class="form-control form-control-sm d-inline-block" style="width:auto;font-size:0.82rem;padding:1px 4px;height:24px;"
+                    onchange="changePageSize(this.value)">
+                {% for opt in page_size_options %}
+                <option value="{{ opt }}" {% if opt == page_size %}selected{% endif %}>{{ opt }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </span>
+</div>
+
+{# Filter dropdown (hidden, positioned by JS) #}
+<div id="col-filter-dropdown" style="display:none;position:absolute;z-index:100;background:#fff;border:1px solid #d1d5db;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.12);padding:8px;min-width:180px;max-width:260px;font-size:0.8rem;">
+    <div id="cf-header" style="font-weight:600;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
+        <span id="cf-title">Filter</span>
+        <button type="button" style="border:none;background:none;cursor:pointer;color:#9ca3af;font-size:0.85rem;" onclick="closeColFilter()">&times;</button>
+    </div>
+    <div id="cf-body"></div>
+    <div style="display:flex;gap:4px;margin-top:8px;">
+        <button class="btn btn-sm btn-primary" style="flex:1;font-size:0.75rem;" onclick="applyColFilter()">Apply</button>
+        <button class="btn btn-sm btn-outline-secondary" style="font-size:0.75rem;" onclick="clearColFilter()">Clear</button>
+    </div>
+</div>
+
+{# Column menu dropdown (hidden, positioned by JS) #}
+<div id="attr-col-menu" style="display:none;" class="attr-col-menu-dropdown">
+    <div class="attr-col-menu-item" onclick="tableSort(window._menuCol, 'asc')"><i class="fas fa-sort-alpha-down"></i> Sort A→Z</div>
+    <div class="attr-col-menu-item" onclick="tableSort(window._menuCol, 'desc')"><i class="fas fa-sort-alpha-up"></i> Sort Z→A</div>
+    <hr style="margin:4px 0;">
+    <div class="attr-col-menu-item" onclick="setColHidden(window._menuCol, true); closeColMenu()"><i class="fas fa-eye-slash"></i> Hide field</div>
+    <div class="attr-col-menu-item" onclick="toggleColFrozen(window._menuCol); closeColMenu()"><i class="fas fa-thumbtack"></i> Freeze field</div>
+</div>
+
+<script>
+function getSelectedIds() {
+    if (window.selectionManager) return Array.from(window.selectionManager.getSelected());
+    var ids = [];
+    document.querySelectorAll('.row-select-cb:checked').forEach(function(cb) {
+        ids.push(parseInt(cb.dataset.sessionId));
+    });
+    return ids;
+}
+function updateBulkToolbar() {
+    var ids = getSelectedIds();
+    var normal = document.getElementById('toolbar-normal');
+    var bulk = document.getElementById('toolbar-bulk');
+    if (!bulk) return;
+    if (ids.length > 0) {
+        normal.style.display = 'none';
+        bulk.style.display = '';
+        document.getElementById('bulk-count').textContent = ids.length + ' selected';
+    } else {
+        normal.style.display = '';
+        bulk.style.display = 'none';
+    }
+    var selectAll = document.getElementById('select-all-cb');
+    var allCbs = document.querySelectorAll('.row-select-cb');
+    if (selectAll && allCbs.length > 0) {
+        selectAll.checked = ids.length === allCbs.length;
+        selectAll.indeterminate = ids.length > 0 && ids.length < allCbs.length;
+    }
+}
+function toggleSelectAll(checked) {
+    var ids = [];
+    document.querySelectorAll('.row-select-cb').forEach(function(cb) { ids.push(parseInt(cb.dataset.sessionId)); });
+    if (window.selectionManager) {
+        if (checked) window.selectionManager.select(ids);
+        else window.selectionManager.clear();
+    }
+}
+function clearSelection() {
+    if (window.selectionManager) window.selectionManager.clear();
+}
+function toggleShowTrash() {
+    var form = document.getElementById('table-state-form');
+    var inp = form.querySelector('[name=trash]');
+    inp.value = inp.value === '1' ? '0' : '1';
+    loadTable({page: '1'});
+}
+function changePageSize(size) {
+    var form = document.getElementById('table-state-form');
+    form.querySelector('[name=page_size]').value = size;
+    loadTable({page: '1'});
+}
+function changeIssuesFilter(val) {
+    var form = document.getElementById('table-state-form');
+    form.querySelector('[name=issues]').value = val;
+    loadTable({page: '1'});
+}
+// Wire checkboxes to SelectionManager
+document.querySelectorAll('.row-select-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+        var sid = parseInt(this.dataset.sessionId);
+        if (window.selectionManager) {
+            if (this.checked) window.selectionManager.select([sid]);
+            else window.selectionManager.deselect([sid]);
+        }
+    });
+});
+// Init SelectionManager with all visible session IDs
+(function() {
+    var allIds = [];
+    document.querySelectorAll('.row-select-cb').forEach(function(cb) {
+        allIds.push(parseInt(cb.dataset.sessionId));
+    });
+    if (window.selectionManager) window.selectionManager.init(allIds);
+})();
+
+// ── Column Filters ──────────────────────────────────────────────
+var _uniqueValues = {};
+try { _uniqueValues = JSON.parse(document.getElementById('unique-values-data').textContent); } catch(e) {}
+var _colFilters = {};
+try { _colFilters = JSON.parse(document.getElementById('col-filters-data').textContent); } catch(e) {}
+var _filterCol = null;
+
+function _getFilterType(colKey, inputType) {
+    if (colKey === 'start_datetime') return 'date_range';
+    if (inputType === 'number' || inputType === 'range') return 'range';
+    if (inputType === 'text' || inputType === 'text_line' || inputType === 'point' || inputType === 'line' || inputType === 'polygon') return 'text';
+    // Default: values (choice, status, language, etc.)
+    return 'values';
+}
+
+function openColFilter(evt, colKey, inputType) {
+    evt.stopPropagation();
+    _filterCol = colKey;
+    var dd = document.getElementById('col-filter-dropdown');
+    var body = document.getElementById('cf-body');
+    body.textContent = '';
+
+    var ftype = _getFilterType(colKey, inputType);
+    var existing = _colFilters[colKey] || {};
+
+    if (ftype === 'values') {
+        var vals = _uniqueValues[colKey] || [];
+        var selectedSet = new Set((existing.values || []));
+        // Search box
+        var search = document.createElement('input');
+        search.type = 'text';
+        search.placeholder = 'Search...';
+        search.className = 'form-control form-control-sm mb-1';
+        search.style.fontSize = '0.75rem';
+        body.appendChild(search);
+        // Select all / clear
+        var controls = document.createElement('div');
+        controls.style.cssText = 'display:flex;gap:8px;margin-bottom:4px;font-size:0.7rem;';
+        var selAll = document.createElement('a');
+        selAll.href = '#'; selAll.textContent = 'Select all';
+        selAll.onclick = function(e) { e.preventDefault(); body.querySelectorAll('.cf-val-cb').forEach(function(c) { if(c.parentElement.style.display!=='none') c.checked = true; }); };
+        var clrAll = document.createElement('a');
+        clrAll.href = '#'; clrAll.textContent = 'Clear';
+        clrAll.onclick = function(e) { e.preventDefault(); body.querySelectorAll('.cf-val-cb').forEach(function(c) { c.checked = false; }); };
+        controls.appendChild(selAll);
+        controls.appendChild(clrAll);
+        body.appendChild(controls);
+        // Checkboxes
+        var list = document.createElement('div');
+        list.style.cssText = 'max-height:200px;overflow-y:auto;';
+        vals.forEach(function(v) {
+            var label = document.createElement('label');
+            label.style.cssText = 'display:flex;align-items:center;gap:4px;padding:1px 0;margin:0;font-weight:normal;cursor:pointer;';
+            var cb = document.createElement('input');
+            cb.type = 'checkbox'; cb.className = 'cf-val-cb'; cb.value = v;
+            cb.checked = selectedSet.size === 0 || selectedSet.has(v);
+            var txt = document.createElement('span');
+            txt.textContent = v || '— (empty)';
+            if (!v) txt.style.color = '#9ca3af';
+            label.appendChild(cb);
+            label.appendChild(txt);
+            list.appendChild(label);
+        });
+        body.appendChild(list);
+        search.addEventListener('input', function() {
+            var q = this.value.toLowerCase();
+            list.querySelectorAll('label').forEach(function(l) {
+                l.style.display = l.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+            });
+        });
+        if (vals.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'text-muted';
+            empty.textContent = 'No values';
+            body.appendChild(empty);
+        }
+    } else if (ftype === 'range') {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:4px;align-items:center;';
+        var minI = document.createElement('input');
+        minI.type = 'number'; minI.step = 'any'; minI.placeholder = 'Min';
+        minI.className = 'form-control form-control-sm'; minI.id = 'cf-range-min';
+        minI.style.cssText = 'font-size:0.75rem;width:80px;';
+        minI.value = existing.min || '';
+        var sep = document.createElement('span');
+        sep.textContent = '–';
+        var maxI = document.createElement('input');
+        maxI.type = 'number'; maxI.step = 'any'; maxI.placeholder = 'Max';
+        maxI.className = 'form-control form-control-sm'; maxI.id = 'cf-range-max';
+        maxI.style.cssText = 'font-size:0.75rem;width:80px;';
+        maxI.value = existing.max || '';
+        row.appendChild(minI); row.appendChild(sep); row.appendChild(maxI);
+        body.appendChild(row);
+    } else if (ftype === 'date_range') {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:4px;align-items:center;';
+        var minD = document.createElement('input');
+        minD.type = 'date'; minD.className = 'form-control form-control-sm'; minD.id = 'cf-date-min';
+        minD.style.cssText = 'font-size:0.75rem;';
+        minD.value = existing.min || '';
+        var sep = document.createElement('span');
+        sep.textContent = '–';
+        var maxD = document.createElement('input');
+        maxD.type = 'date'; maxD.className = 'form-control form-control-sm'; maxD.id = 'cf-date-max';
+        maxD.style.cssText = 'font-size:0.75rem;';
+        maxD.value = existing.max || '';
+        row.appendChild(minD); row.appendChild(sep); row.appendChild(maxD);
+        body.appendChild(row);
+    } else { // text
+        var inp = document.createElement('input');
+        inp.type = 'text'; inp.placeholder = 'Contains...';
+        inp.className = 'form-control form-control-sm'; inp.id = 'cf-text-query';
+        inp.style.fontSize = '0.75rem';
+        inp.value = existing.query || '';
+        body.appendChild(inp);
+    }
+
+    // Position near the trigger
+    var trigger = evt.currentTarget;
+    var container = document.getElementById('pane-table-content');
+    var cRect = container.getBoundingClientRect();
+    var tRect = trigger.getBoundingClientRect();
+    dd.style.left = (tRect.left - cRect.left) + 'px';
+    dd.style.top = (tRect.bottom - cRect.top + 2) + 'px';
+    dd.style.display = '';
+    dd.dataset.filterType = ftype;
+}
+
+function closeColFilter() {
+    document.getElementById('col-filter-dropdown').style.display = 'none';
+    _filterCol = null;
+}
+
+function applyColFilter() {
+    var dd = document.getElementById('col-filter-dropdown');
+    var ftype = dd.dataset.filterType;
+    var form = document.getElementById('table-state-form');
+
+    // Remove existing cf_ for this column
+    var existingInput = form.querySelector('[name="cf_' + _filterCol + '"]');
+    if (existingInput) existingInput.remove();
+
+    var val = '';
+    if (ftype === 'values') {
+        var checked = [];
+        dd.querySelectorAll('.cf-val-cb:checked').forEach(function(cb) { checked.push(cb.value); });
+        var allCbs = dd.querySelectorAll('.cf-val-cb');
+        if (checked.length > 0 && checked.length < allCbs.length) {
+            val = 'v:' + checked.join('|');
+        }
+    } else if (ftype === 'range') {
+        var mn = (document.getElementById('cf-range-min') || {}).value || '';
+        var mx = (document.getElementById('cf-range-max') || {}).value || '';
+        if (mn || mx) val = 'r:' + mn + '|' + mx;
+    } else if (ftype === 'date_range') {
+        var mn = (document.getElementById('cf-date-min') || {}).value || '';
+        var mx = (document.getElementById('cf-date-max') || {}).value || '';
+        if (mn || mx) val = 'd:' + mn + '|' + mx;
+    } else if (ftype === 'text') {
+        var q = (document.getElementById('cf-text-query') || {}).value || '';
+        if (q) val = 't:' + q;
+    }
+
+    if (val) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'cf_' + _filterCol; inp.value = val;
+        form.appendChild(inp);
+    }
+    closeColFilter();
+    loadTable({page: '1'});
+}
+
+function clearColFilter() {
+    var form = document.getElementById('table-state-form');
+    var existingInput = form.querySelector('[name="cf_' + _filterCol + '"]');
+    if (existingInput) existingInput.remove();
+    closeColFilter();
+    loadTable({page: '1'});
+}
+
+// Show active filter indicators
+(function() {
+    var indicators = {
+        'values': function(f) { return f.values.length + ' selected'; },
+        'range': function(f) { return (f.min || '∞') + ' – ' + (f.max || '∞'); },
+        'date_range': function(f) { return (f.min || '...') + ' – ' + (f.max || '...'); },
+        'text': function(f) { return '"' + f.query + '"'; },
+    };
+    for (var col in _colFilters) {
+        var cell = document.querySelector('.attr-filter-indicator[data-filter-col="' + col + '"]');
+        if (cell) {
+            var f = _colFilters[col];
+            cell.textContent = indicators[f.type] ? indicators[f.type](f) : '';
+            cell.style.color = '#1a56db';
+            cell.style.fontWeight = '600';
+        }
+    }
+})();
+
+// Highlight active filter icons
+for (var col in _colFilters) {
+    var th = document.querySelector('th[data-col="' + col + '"] .attr-th-filter');
+    if (th) th.classList.add('active');
+}
+
+// Close filter dropdown on outside click
+document.addEventListener('click', function(e) {
+    var dd = document.getElementById('col-filter-dropdown');
+    if (dd && dd.style.display !== 'none' && !dd.contains(e.target)) {
+        closeColFilter();
+    }
+});
+// Inline cell editing
+function startCellEdit(span, sid, qid, inputType, choicesJson) {
+    if (span.querySelector('input, select')) return; // already editing
+    var currentVal = span.textContent.trim();
+    if (currentVal === '—') currentVal = '';
+    var input;
+    if (inputType === 'choice' || inputType === 'rating' || inputType === 'multichoice') {
+        var choices = [];
+        try { choices = JSON.parse(choicesJson); } catch(e) {}
+        input = document.createElement('select');
+        input.className = 'form-control form-control-sm';
+        input.style.cssText = 'font-size:0.8rem;height:24px;padding:1px 4px;width:100%;';
+        var opt0 = document.createElement('option');
+        opt0.value = ''; opt0.textContent = '—';
+        input.appendChild(opt0);
+        choices.forEach(function(c) {
+            var opt = document.createElement('option');
+            opt.value = c.code;
+            opt.textContent = typeof c.name === 'string' ? c.name : (c.name.en || Object.values(c.name)[0] || c.code);
+            if (currentVal && opt.textContent.trim() === currentVal.trim()) opt.selected = true;
+            input.appendChild(opt);
+        });
+    } else if (inputType === 'number' || inputType === 'range') {
+        input = document.createElement('input');
+        input.type = 'number';
+        input.step = 'any';
+        input.value = currentVal;
+        input.className = 'form-control form-control-sm';
+        input.style.cssText = 'font-size:0.8rem;height:24px;padding:1px 4px;width:100%;';
+    } else {
+        input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentVal;
+        input.className = 'form-control form-control-sm';
+        input.style.cssText = 'font-size:0.8rem;height:24px;padding:1px 4px;width:100%;';
+    }
+    span.textContent = '';
+    span.appendChild(input);
+    input.focus();
+    input.addEventListener('blur', function() { saveCellEdit(span, sid, qid, inputType, input); });
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { loadTable(); }
+    });
+}
+function saveCellEdit(span, sid, qid, inputType, input) {
+    var val = input.value;
+    if (inputType === 'number' || inputType === 'range') {
+        val = val === '' ? null : parseFloat(val);
+    } else if (inputType === 'choice' || inputType === 'rating') {
+        val = val === '' ? null : parseInt(val);
+    }
+    var url = '{% url "analytics_answer_edit" survey.uuid 0 0 %}'.replace('/0/answers/0/', '/' + sid + '/answers/' + qid + '/');
+    fetch(url, {
+        method: 'POST',
+        headers: {'X-CSRFToken': _getCsrfToken(), 'Content-Type': 'application/json'},
+        body: JSON.stringify({value: val}),
+    }).then(function(resp) {
+        if (resp.ok) loadTable();
+    });
+}
+</script>

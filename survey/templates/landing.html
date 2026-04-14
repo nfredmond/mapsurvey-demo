@@ -1,0 +1,109 @@
+{% extends "base_landing.html" %}
+{% load static %}
+
+{% block title %}Ride San Diego Engagement Hub{% endblock %}
+{% block meta_description %}A Mapsurvey-powered engagement demo for collecting safer biking routes, dangerous intersections, missing links, and bike parking needs across San Diego County.{% endblock %}
+{% block og_title %}Ride San Diego Engagement Hub{% endblock %}
+
+{% block content %}
+<main>
+    <section class="engage-hero" id="start">
+        <div class="engage-hero__content">
+            <p class="eyebrow">San Diego County Bicycle Coalition demo</p>
+            <h1>Community input, mapped for safer streets.</h1>
+            <p class="lead">A public engagement hub for collecting dangerous crossings, missing bikeway links, school routes, and mode-shift priorities across San Diego County.</p>
+            <div class="action-row">
+                {% if DEMO_SURVEY_URL %}
+                <a class="button button-primary" href="{{ DEMO_SURVEY_URL }}">Open the live survey</a>
+                {% elif surveys %}
+                <a class="button button-primary" href="{% url 'survey' surveys.0.uuid %}">Open the live survey</a>
+                {% else %}
+                <a class="button button-primary" href="{% url 'editor' %}">Create the first survey</a>
+                {% endif %}
+                <a class="button button-secondary" href="#dashboard">View the advocacy workflow</a>
+            </div>
+            <dl class="metric-row" aria-label="Campaign goals">
+                <div><dt>15</dt><dd>priority intersections</dd></div>
+                <div><dt>6%</dt><dd>high-injury roadways</dd></div>
+                <div><dt>10%</dt><dd>bike mode share goal</dd></div>
+            </dl>
+        </div>
+        <div class="engage-hero__visual" aria-label="San Diego bike engagement preview">
+            <img src="{% static 'img/demo/sd-bike-bus.webp' %}" alt="Bike bus riders in San Diego">
+            <div class="insight-panel">
+                <span class="panel-label">Live pilot themes</span>
+                <div class="insight-row"><span class="dot dot-red"></span>Unsafe crossings</div>
+                <div class="insight-row"><span class="dot dot-blue"></span>School routes</div>
+                <div class="insight-row"><span class="dot dot-yellow"></span>Missing links</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="campaign-board" id="dashboard">
+        <div class="section-header">
+            <p class="eyebrow">Engagement platform</p>
+            <h2>One public hub for surveys, stories, and advocacy follow-through.</h2>
+        </div>
+        <div class="board-grid">
+            <article class="board-card">
+                <span class="card-label">01 / Vision Zero</span>
+                <h3>Fatal 15 intersection audit</h3>
+                <p>Ask riders to mark dangerous crossings, near misses, signal problems, and routes kids avoid on the way to school.</p>
+            </article>
+            <article class="board-card">
+                <span class="card-label">02 / Network gaps</span>
+                <h3>Connected bikeway map</h3>
+                <p>Capture missing links between neighborhoods, transit, schools, beaches, employment centers, and existing bikeways.</p>
+            </article>
+            <article class="board-card">
+                <span class="card-label">03 / Mode shift</span>
+                <h3>Trip replacement insights</h3>
+                <p>Learn which short car trips could become bike trips if safety, parking, shade, or wayfinding improved.</p>
+            </article>
+            <article class="board-card">
+                <span class="card-label">04 / Education</span>
+                <h3>School bike readiness</h3>
+                <p>Identify school communities that want bike buses, safety classes, repair clinics, and family riding support.</p>
+            </article>
+        </div>
+    </section>
+
+    <section class="workflow">
+        <div class="section-header">
+            <p class="eyebrow">How it works</p>
+            <h2>Turn community input into mapped advocacy evidence.</h2>
+        </div>
+        <ol class="workflow-list">
+            <li><strong>Launch a map survey.</strong> Residents draw routes, drop pins, outline zones, and answer context questions on mobile or desktop.</li>
+            <li><strong>Review responses.</strong> Staff validate submissions, tag themes, inspect maps, and track completion funnels in the editor dashboard.</li>
+            <li><strong>Export for action.</strong> Download GeoJSON and CSV for council briefings, SANDAG conversations, grant narratives, and public reports.</li>
+        </ol>
+    </section>
+
+    <section class="survey-listing">
+        <div class="section-header">
+            <p class="eyebrow">Live pilot</p>
+            <h2>Start with the Bike for a Better San Diego survey.</h2>
+        </div>
+        <div class="survey-grid">
+            {% for survey in surveys %}
+            <a class="survey-link" href="{% url 'survey' survey.uuid %}">
+                <span>{{ survey.organization.name }}</span>
+                {% if survey.name == "bike_for_better_sd" %}
+                <strong>Bike for a Better San Diego</strong>
+                {% else %}
+                <strong>{{ survey.name|title }}</strong>
+                {% endif %}
+                {% if survey.session_count %}
+                <small>{{ survey.session_count }} mapped responses ready for review</small>
+                {% else %}
+                <small>Ready for the first community response</small>
+                {% endif %}
+            </a>
+            {% empty %}
+            <p class="empty-state">Run <code>python manage.py seed_sdbike_demo</code> to install the demo survey.</p>
+            {% endfor %}
+        </div>
+    </section>
+</main>
+{% endblock %}

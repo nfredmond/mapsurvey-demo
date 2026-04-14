@@ -1,0 +1,761 @@
+<div class="analytics-section">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+        <h6 style="margin:0;">Response Map <small class="text-muted">({{ geo_features_count }} features)</small></h6>
+        <button class="expand-btn" onclick="togglePanelFullscreen('data-panel-map')"><i class="fas fa-expand"></i></button>
+    </div>
+    <div class="q-filter-pills" data-qid="geo" style="display:none;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.4rem;"></div>
+    <div id="analytics-map"></div>
+</div>
+
+{# Session detail modal moved to analytics_dashboard.html (unconditional, shared with Table tab) #}
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var geoData = JSON.parse('{{ geo_json|escapejs }}');
+    if (!geoData.features.length) return;
+
+    window.geoToolMode = 'pointer';
+    window._sessionMiniMap = null;
+
+    var map = L.map('analytics-map', { zoomControl: false });
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+    window.analyticsMap = map;
+
+    L.tileLayer('{{ MAPBOX_URL }}', {
+        attribution: 'Data &copy; <a href="http://osm.org/copyright">OpenStreetMap</a>',
+        maxZoom: 18,
+        accessToken: '{{ MAPBOX_ACCESS_TOKEN }}'
+    }).addTo(map);
+
+    var colors = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+    var HEAT_DEFAULTS = { radius: 25, blur: 15, minOpacity: 0.4 };
+
+    // ── LayerManager ──────────────────────────────────────────────
+    // Slots have two types:
+    //   'features' — point/line/polygon features from a question
+    //   'heat'     — heatmap derived from a features slot
+    function LayerManager() {
+        this._map = null;
+        this._slots = new Map();
+        this._order = [];
+        this._sids = null;
+        this._paneCounter = 0;
+        this._BASE_Z = 400;
+        this._STEP = 10;
+    }
+
+    LayerManager.prototype._createPane = function() {
+        var name = 'geo-pane-' + this._paneCounter++;
+        this._map.createPane(name);
+        return name;
+    };
+
+    LayerManager.prototype.init = function(map, geoData, colors) {
+        this._map = map;
+
+        var questionNames = [];
+        var questionGeomType = {};
+        geoData.features.forEach(function(f) {
+            var qName = f.properties.question;
+            if (!questionGeomType[qName]) {
+                questionNames.push(qName);
+                questionGeomType[qName] = f.geometry.type;
+            }
+        });
+
+        questionNames.forEach(function(qName, idx) {
+            var geomType = questionGeomType[qName];
+            var color = colors[idx % colors.length];
+            var paneName = this._createPane();
+
+            var slot = {
+                id: qName,
+                type: 'features',
+                geomType: geomType,
+                color: color,
+                pane: paneName,
+                visible: true,
+                features: [],
+                allPoints: [],
+            };
+
+            geoData.features.forEach(function(f) {
+                if (f.properties.question !== qName) return;
+                var sid = f.properties.session_id;
+                var featureLayer;
+
+                if (f.geometry.type === 'Point') {
+                    var coords = f.geometry.coordinates;
+                    featureLayer = L.circleMarker(L.latLng(coords[1], coords[0]), {
+                        radius: 5, color: color, fillColor: color,
+                        fillOpacity: 0.7, weight: 1, pane: paneName,
+                    });
+                    featureLayer.feature = f;
+                    slot.allPoints.push([coords[1], coords[0]]);
+                } else {
+                    featureLayer = L.geoJSON(f, {
+                        style: function() { return { color: color, weight: 2, fillOpacity: 0.2 }; },
+                        pane: paneName,
+                    });
+                }
+
+                featureLayer.on('click', function(e) {
+                    var mode = window.geoToolMode || 'pointer';
+                    if (mode === 'pointer') {
+                        if (window.selectionManager) {
+                            if (e.originalEvent && e.originalEvent.ctrlKey) {
+                                window.selectionManager.toggle(sid);
+                            } else {
+                                window.selectionManager.setSelection([sid]);
+                            }
+                        }
+                    } else if (mode === 'details') {
+                        openSessionDetailModal(sid);
+                    }
+                });
+
+                featureLayer.addTo(map);
+                slot.features.push({ layer: featureLayer, sid: sid });
+            });
+
+            this._slots.set(qName, slot);
+            this._order.push(qName);
+        }.bind(this));
+
+        this._assignPaneZIndices();
+    };
+
+    LayerManager.prototype._assignPaneZIndices = function() {
+        var BASE = this._BASE_Z, STEP = this._STEP;
+        var last = this._order.length - 1;
+        this._order.forEach(function(id, idx) {
+            var slot = this._slots.get(id);
+            this._map.getPane(slot.pane).style.zIndex = BASE + (last - idx) * STEP;
+        }.bind(this));
+    };
+
+    // ── Heat layer lifecycle ──────────────────────────────────────
+
+    LayerManager.prototype.createHeat = function(sourceId) {
+        var src = this._slots.get(sourceId);
+        if (!src || src.geomType !== 'Point' || !src.allPoints.length) return null;
+
+        var heatId = 'heat:' + sourceId;
+        if (this._slots.has(heatId)) return null; // already exists
+
+        var paneName = this._createPane();
+        var heatLayer = L.heatLayer([], Object.assign({}, HEAT_DEFAULTS));
+        heatLayer.addTo(this._map);
+
+        // Move canvas into dedicated pane for z-ordering
+        var canvas = heatLayer._canvas;
+        if (canvas) this._map.getPane(paneName).appendChild(canvas);
+
+        var slot = {
+            id: heatId,
+            type: 'heat',
+            sourceId: sourceId,
+            label: null,
+            color: src.color,
+            pane: paneName,
+            visible: true,
+            heatLayer: heatLayer,
+        };
+
+        this._slots.set(heatId, slot);
+        // Insert right above source in order
+        var srcIdx = this._order.indexOf(sourceId);
+        this._order.splice(srcIdx + 1, 0, heatId);
+        this._assignPaneZIndices();
+
+        // Initial render with current filter
+        this._rebuildHeat(slot);
+        return heatId;
+    };
+
+    LayerManager.prototype.removeHeat = function(heatId) {
+        var slot = this._slots.get(heatId);
+        if (!slot || slot.type !== 'heat') return;
+
+        // Hide canvas and remove from DOM
+        var canvas = slot.heatLayer._canvas;
+        if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas);
+
+        this._slots.delete(heatId);
+        var idx = this._order.indexOf(heatId);
+        if (idx !== -1) this._order.splice(idx, 1);
+        this._assignPaneZIndices();
+    };
+
+    LayerManager.prototype._rebuildHeat = function(slot) {
+        if (!slot.heatLayer || !slot.heatLayer._canvas) return;
+        var canvas = slot.heatLayer._canvas;
+        var src = this._slots.get(slot.sourceId);
+
+        if (!slot.visible || !src) {
+            canvas.style.display = 'none';
+            return;
+        }
+
+        var points;
+        if (this._sids === null) {
+            points = src.allPoints;
+        } else {
+            var sids = this._sids;
+            points = [];
+            src.features.forEach(function(entry) {
+                if (!sids.has(entry.sid)) return;
+                if (typeof entry.layer.getLatLng === 'function') {
+                    var ll = entry.layer.getLatLng();
+                    points.push([ll.lat, ll.lng]);
+                }
+            });
+        }
+
+        if (points.length === 0) {
+            canvas.style.display = 'none';
+            return;
+        }
+
+        canvas.style.display = '';
+        slot.heatLayer.setLatLngs(points);
+    };
+
+    LayerManager.prototype.setHeatOptions = function(heatId, opts) {
+        var slot = this._slots.get(heatId);
+        if (!slot || !slot.heatLayer) return;
+        slot.heatLayer.setOptions(opts);
+        slot.heatLayer.redraw();
+    };
+
+    // ── Visibility & filtering ────────────────────────────────────
+
+    LayerManager.prototype.setFilter = function(sids) {
+        if (!this._slots || this._slots.size === 0) return;
+        this._sids = sids;
+
+        this._slots.forEach(function(slot) {
+            if (slot.type === 'features') {
+                slot.features.forEach(function(entry) {
+                    var sidOk = sids === null || sids.has(entry.sid);
+                    var visible = slot.visible && sidOk;
+                    if (visible) {
+                        if (!this._map.hasLayer(entry.layer)) entry.layer.addTo(this._map);
+                    } else {
+                        if (this._map.hasLayer(entry.layer)) this._map.removeLayer(entry.layer);
+                    }
+                }.bind(this));
+            } else if (slot.type === 'heat' && slot.visible) {
+                this._rebuildHeat(slot);
+            }
+        }.bind(this));
+    };
+
+    LayerManager.prototype.setLayerVisible = function(id, visible) {
+        var slot = this._slots.get(id);
+        if (!slot) return;
+        slot.visible = visible;
+
+        if (slot.type === 'features') {
+            slot.features.forEach(function(entry) {
+                if (visible) {
+                    var sidOk = this._sids === null || this._sids.has(entry.sid);
+                    if (sidOk && !this._map.hasLayer(entry.layer)) entry.layer.addTo(this._map);
+                } else {
+                    if (this._map.hasLayer(entry.layer)) this._map.removeLayer(entry.layer);
+                }
+            }.bind(this));
+        } else if (slot.type === 'heat') {
+            this._rebuildHeat(slot);
+        }
+    };
+
+    LayerManager.prototype.reorder = function(newOrder) {
+        if (!newOrder || !newOrder.length) return;
+        this._order = newOrder;
+        this._assignPaneZIndices();
+    };
+
+    LayerManager.prototype.getFeatureLayers = function() {
+        var result = [];
+        this._slots.forEach(function(slot) {
+            if (slot.type !== 'features') return;
+            slot.features.forEach(function(entry) {
+                result.push({ layer: entry.layer, sid: entry.sid, question: slot.id, color: slot.color });
+            });
+        });
+        return result;
+    };
+
+    LayerManager.prototype.getSlotIds = function() { return this._order.slice(); };
+    LayerManager.prototype.getSlot = function(id) { return this._slots.get(id); };
+
+    LayerManager.prototype.hasHeatFor = function(sourceId) {
+        return this._slots.has('heat:' + sourceId);
+    };
+
+    // ── Instantiate ───────────────────────────────────────────────
+    window.layerManager = new LayerManager();
+    window.layerManager.init(map, geoData, colors);
+
+    // ── Draw handlers ─────────────────────────────────────────────
+    var drawShapeOpts = { color: '#4f46e5', weight: 2, fillOpacity: 0.08, dashArray: '4,4' };
+    var rectHandler = new L.Draw.Rectangle(map, { shapeOptions: drawShapeOpts });
+    var polyHandler = new L.Draw.Polygon(map, { shapeOptions: drawShapeOpts });
+
+    var _ctrlHeld = false;
+    document.addEventListener('keydown', function(e) { if (e.key === 'Control') _ctrlHeld = true; });
+    document.addEventListener('keyup', function(e) { if (e.key === 'Control') _ctrlHeld = false; });
+
+
+    map.on('draw:created', function(e) {
+        var allFeatures = window.layerManager.getFeatureLayers();
+        var matchingSids = new Set();
+        allFeatures.forEach(function(entry) {
+            if (!map.hasLayer(entry.layer)) return;
+            if (e.layerType === 'rectangle') {
+                var bounds = e.layer.getBounds();
+                if (typeof entry.layer.getLatLng === 'function') {
+                    if (bounds.contains(entry.layer.getLatLng())) matchingSids.add(entry.sid);
+                } else if (typeof entry.layer.getBounds === 'function') {
+                    if (bounds.intersects(entry.layer.getBounds())) matchingSids.add(entry.sid);
+                }
+            } else if (e.layerType === 'polygon') {
+                if (typeof entry.layer.getLatLng === 'function') {
+                    if (_pointInPolygon(entry.layer.getLatLng(), e.layer)) matchingSids.add(entry.sid);
+                } else if (typeof entry.layer.getBounds === 'function') {
+                    if (e.layer.getBounds().intersects(entry.layer.getBounds())) matchingSids.add(entry.sid);
+                }
+            }
+        });
+        if (window.selectionManager) {
+            if (_ctrlHeld && matchingSids.size > 0) {
+                window.selectionManager.select(Array.from(matchingSids));
+            } else if (matchingSids.size > 0) {
+                window.selectionManager.setSelection(Array.from(matchingSids));
+            } else {
+                window.selectionManager.clear();
+            }
+        }
+        window.setGeoTool('pointer');
+    });
+
+    function _pointInPolygon(latlng, polygonLayer) {
+        var polyPoints = polygonLayer.getLatLngs()[0];
+        var x = latlng.lat, y = latlng.lng;
+        var inside = false;
+        for (var i = 0, j = polyPoints.length - 1; i < polyPoints.length; j = i++) {
+            var xi = polyPoints[i].lat, yi = polyPoints[i].lng;
+            var xj = polyPoints[j].lat, yj = polyPoints[j].lng;
+            if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+        }
+        return inside;
+    }
+
+    var allBounds = L.geoJSON(geoData).getBounds();
+    map.fitBounds(allBounds.pad(0.02));
+
+    // ── Tool switching ────────────────────────────────────────────
+    window.setGeoTool = function(name) {
+        window.geoToolMode = name;
+        document.querySelectorAll('.geo-toolbar-btn').forEach(function(btn) {
+            btn.classList.toggle('active', btn.dataset.tool === name);
+        });
+        rectHandler.disable();
+        polyHandler.disable();
+        if (name === 'rectangle') rectHandler.enable();
+        if (name === 'polygon') polyHandler.enable();
+    };
+
+    // ── Session detail modal (delegates to global loadSessionDetail in dashboard) ──
+    function openSessionDetailModal(sid) {
+        if (typeof loadSessionDetail === 'function') {
+            loadSessionDetail(sid);
+        }
+    }
+
+    // ── Toolbar control ───────────────────────────────────────────
+    var ToolbarControl = L.Control.extend({
+        onAdd: function() {
+            var div = L.DomUtil.create('div', 'geo-toolbar');
+            L.DomEvent.disableClickPropagation(div);
+            L.DomEvent.disableScrollPropagation(div);
+            [
+                { name: 'pointer',   icon: 'fa-mouse-pointer', title: 'Select (click, Ctrl+click to add)' },
+                { name: 'rectangle', icon: 'fa-vector-square',  title: 'Rectangle select' },
+                { name: 'polygon',   icon: 'fa-draw-polygon',   title: 'Polygon select' },
+                { name: 'details',   icon: 'fa-info-circle',    title: 'Session details' },
+            ].forEach(function(t) {
+                var btn = document.createElement('button');
+                btn.className = 'geo-toolbar-btn';
+                btn.dataset.tool = t.name;
+                btn.title = t.title;
+                if (t.name === 'pointer') btn.classList.add('active');
+                var icon = document.createElement('i');
+                icon.className = 'fas ' + t.icon;
+                btn.appendChild(icon);
+                btn.addEventListener('click', function() { window.setGeoTool(t.name); });
+                div.appendChild(btn);
+            });
+            return div;
+        }
+    });
+    new ToolbarControl({ position: 'topright' }).addTo(map);
+
+    // ── Heatmap settings popover ──────────────────────────────────
+    var _activePopover = null;
+
+    function _closeHeatSettings() {
+        if (_activePopover) { _activePopover.remove(); _activePopover = null; }
+        document.removeEventListener('mousedown', _onDocClickClosePopover);
+    }
+
+    function _onDocClickClosePopover(e) {
+        if (_activePopover && !_activePopover.contains(e.target)) _closeHeatSettings();
+    }
+
+    function _openHeatSettings(heatId) {
+        _closeHeatSettings();
+        var slot = window.layerManager.getSlot(heatId);
+        if (!slot || !slot.heatLayer) return;
+
+        var opts = slot.heatLayer.options;
+        var pop = document.createElement('div');
+        pop.className = 'geo-heat-popover';
+        L.DomEvent.disableClickPropagation(pop);
+        L.DomEvent.disableScrollPropagation(pop);
+
+        var header = document.createElement('div');
+        header.className = 'geo-heat-popover-header';
+        var title = document.createElement('h6');
+        title.textContent = 'Heatmap Settings';
+        header.appendChild(title);
+        var closeBtn = document.createElement('button');
+        closeBtn.className = 'close-btn';
+        var closeIcon = document.createElement('i');
+        closeIcon.className = 'fas fa-times';
+        closeBtn.appendChild(closeIcon);
+        closeBtn.addEventListener('click', _closeHeatSettings);
+        header.appendChild(closeBtn);
+        pop.appendChild(header);
+
+        var layerLabel = document.createElement('div');
+        layerLabel.className = 'geo-heat-popover-layer';
+        layerLabel.textContent = slot.sourceId;
+        layerLabel.title = slot.sourceId;
+        pop.appendChild(layerLabel);
+
+        [
+            { key: 'radius',     label: 'Radius',  min: 5,    max: 60, step: 1,    val: opts.radius || 25 },
+            { key: 'blur',       label: 'Blur',    min: 1,    max: 50, step: 1,    val: opts.blur || 15 },
+            { key: 'minOpacity', label: 'Opacity', min: 0.05, max: 1,  step: 0.05, val: opts.minOpacity || 0.4 },
+        ].forEach(function(s) {
+            var row = document.createElement('label');
+            var nameSpan = document.createElement('span');
+            nameSpan.textContent = s.label;
+            row.appendChild(nameSpan);
+            var input = document.createElement('input');
+            input.type = 'range'; input.min = s.min; input.max = s.max;
+            input.step = s.step; input.value = s.val;
+            row.appendChild(input);
+            var valSpan = document.createElement('span');
+            valSpan.className = 'val';
+            valSpan.textContent = s.step < 1 ? parseFloat(s.val).toFixed(2) : s.val;
+            row.appendChild(valSpan);
+            input.addEventListener('input', function() {
+                var v = parseFloat(input.value);
+                valSpan.textContent = s.step < 1 ? v.toFixed(2) : v;
+                var u = {}; u[s.key] = v;
+                window.layerManager.setHeatOptions(heatId, u);
+            });
+            pop.appendChild(row);
+        });
+
+        var mapContainer = document.getElementById('analytics-map');
+        mapContainer.style.position = 'relative';
+        mapContainer.appendChild(pop);
+
+        // Drag by header
+        var _dragOfs = null;
+        header.addEventListener('mousedown', function(e) {
+            if (e.target.closest('.close-btn')) return;
+            _dragOfs = { x: e.clientX - pop.offsetLeft, y: e.clientY - pop.offsetTop };
+            pop.style.transform = 'none';
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function(e) {
+            if (!_dragOfs) return;
+            pop.style.left = (e.clientX - _dragOfs.x) + 'px';
+            pop.style.top = (e.clientY - _dragOfs.y) + 'px';
+        });
+        document.addEventListener('mouseup', function() { _dragOfs = null; });
+
+        _activePopover = pop;
+        setTimeout(function() { document.addEventListener('mousedown', _onDocClickClosePopover); }, 0);
+    }
+
+    // ── Legend control ─────────────────────────────────────────────
+    var _legendBody = null;
+
+    function _buildLegendItem(slot) {
+        var id = slot.id;
+        var item = document.createElement('div');
+        item.className = 'geo-legend-item';
+        item.dataset.layerId = id;
+
+        var row = document.createElement('div');
+        row.className = 'geo-legend-row';
+
+        // Drag handle
+        var handle = document.createElement('i');
+        handle.className = 'fas fa-grip-vertical geo-drag-handle';
+        row.appendChild(handle);
+
+        // Visibility checkbox
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = slot.visible;
+        cb.addEventListener('change', function() {
+            window.layerManager.setLayerVisible(id, cb.checked);
+            if (window.filterManager) window.filterManager._renderSelection();
+        });
+        row.appendChild(cb);
+
+        if (slot.type === 'features') {
+            // Geometry type icon (colored)
+            var geomIcons = { 'Point': 'fa-circle', 'LineString': 'fa-route', 'Polygon': 'fa-draw-polygon' };
+            var geomIcon = document.createElement('i');
+            geomIcon.className = 'fas ' + (geomIcons[slot.geomType] || 'fa-circle');
+            geomIcon.className += ' geo-legend-geom-icon';
+            geomIcon.style.color = slot.color;
+            row.appendChild(geomIcon);
+
+            // Label
+            var label = document.createElement('span');
+            label.className = 'geo-legend-label';
+            label.textContent = id;
+            label.title = 'Zoom to layer';
+            label.addEventListener('click', function() {
+                var bounds = L.latLngBounds([]);
+                slot.features.forEach(function(entry) {
+                    if (typeof entry.layer.getLatLng === 'function') bounds.extend(entry.layer.getLatLng());
+                    else if (typeof entry.layer.getBounds === 'function') bounds.extend(entry.layer.getBounds());
+                });
+                if (bounds.isValid()) map.fitBounds(bounds.pad(0.02));
+            });
+            row.appendChild(label);
+
+            // Zoom icon
+            var aimIcon = document.createElement('i');
+            aimIcon.className = 'fas fa-crosshairs';
+            aimIcon.style.cssText = 'color:#9ca3af;font-size:0.7rem;flex-shrink:0;cursor:pointer;';
+            aimIcon.title = 'Zoom to layer';
+            aimIcon.addEventListener('click', function() { label.click(); });
+            row.appendChild(aimIcon);
+
+            // Menu button (for Point layers only)
+            if (slot.geomType === 'Point' && slot.allPoints.length > 0) {
+                var menuBtn = document.createElement('button');
+                menuBtn.className = 'geo-layer-menu-btn';
+                menuBtn.title = 'Layer actions';
+                var menuIcon = document.createElement('i');
+                menuIcon.className = 'fas fa-ellipsis-v';
+                menuBtn.appendChild(menuIcon);
+                menuBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    _showLayerMenu(id, menuBtn);
+                });
+                row.appendChild(menuBtn);
+            }
+        } else if (slot.type === 'heat') {
+            // Gradient swatch
+            var hSwatch = document.createElement('span');
+            hSwatch.className = 'geo-legend-heat-swatch';
+            row.appendChild(hSwatch);
+
+            // Label
+            var hLabel = document.createElement('span');
+            hLabel.className = 'geo-legend-label geo-legend-heat-label';
+            hLabel.textContent = slot.label || slot.sourceId;
+            hLabel.title = 'Double-click to rename';
+            hLabel.addEventListener('dblclick', function(e) {
+                e.stopPropagation();
+                var input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'geo-legend-rename';
+                input.value = hLabel.textContent;
+                hLabel.replaceWith(input);
+                input.focus();
+                input.select();
+                function commit() {
+                    var val = input.value.trim() || slot.sourceId;
+                    slot.label = val;
+                    hLabel.textContent = val;
+                    input.replaceWith(hLabel);
+                }
+                input.addEventListener('blur', commit);
+                input.addEventListener('keydown', function(ke) {
+                    if (ke.key === 'Enter') input.blur();
+                    if (ke.key === 'Escape') { input.value = hLabel.textContent; input.blur(); }
+                });
+            });
+            row.appendChild(hLabel);
+
+            // Settings
+            var gearBtn = document.createElement('button');
+            gearBtn.className = 'geo-heat-settings-btn';
+            gearBtn.title = 'Heatmap settings';
+            var gearIcon = document.createElement('i');
+            gearIcon.className = 'fas fa-sliders-h';
+            gearBtn.appendChild(gearIcon);
+            gearBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                _openHeatSettings(id);
+            });
+            row.appendChild(gearBtn);
+
+            // Delete
+            var delBtn = document.createElement('button');
+            delBtn.className = 'geo-heat-settings-btn';
+            delBtn.title = 'Remove heatmap';
+            var delIcon = document.createElement('i');
+            delIcon.className = 'fas fa-times';
+            delBtn.appendChild(delIcon);
+            delBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                _closeHeatSettings();
+                window.layerManager.removeHeat(id);
+                item.remove();
+            });
+            row.appendChild(delBtn);
+        }
+
+        item.appendChild(row);
+        return item;
+    }
+
+    // Layer context menu
+    var _activeMenu = null;
+
+    function _closeLayerMenu() {
+        if (_activeMenu) { _activeMenu.remove(); _activeMenu = null; }
+        document.removeEventListener('mousedown', _onDocClickCloseMenu);
+    }
+
+    function _onDocClickCloseMenu(e) {
+        if (_activeMenu && !_activeMenu.contains(e.target)) _closeLayerMenu();
+    }
+
+    function _showLayerMenu(sourceId, anchorEl) {
+        _closeLayerMenu();
+        var menu = document.createElement('div');
+        menu.className = 'geo-layer-menu';
+        L.DomEvent.disableClickPropagation(menu);
+
+        var hasHeat = window.layerManager.hasHeatFor(sourceId);
+
+        var heatAction = document.createElement('div');
+        heatAction.className = 'geo-layer-menu-item' + (hasHeat ? ' disabled' : '');
+        var heatIcon = document.createElement('i');
+        heatIcon.className = 'fas fa-fire';
+        heatAction.appendChild(heatIcon);
+        heatAction.appendChild(document.createTextNode(hasHeat ? ' Heatmap exists' : ' Create Heatmap'));
+        if (!hasHeat) {
+            heatAction.addEventListener('click', function() {
+                var heatId = window.layerManager.createHeat(sourceId);
+                if (heatId && _legendBody) {
+                    var heatSlot = window.layerManager.getSlot(heatId);
+                    var heatItem = _buildLegendItem(heatSlot);
+                    // Insert after source item in DOM
+                    var sourceItem = _legendBody.querySelector('[data-layer-id="' + CSS.escape(sourceId) + '"]');
+                    if (sourceItem && sourceItem.nextSibling) {
+                        _legendBody.insertBefore(heatItem, sourceItem.nextSibling);
+                    } else {
+                        _legendBody.appendChild(heatItem);
+                    }
+                }
+                _closeLayerMenu();
+            });
+        }
+        menu.appendChild(heatAction);
+
+        // Position near anchor
+        document.body.appendChild(menu);
+        var rect = anchorEl.getBoundingClientRect();
+        menu.style.left = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8) + 'px';
+        menu.style.top = (rect.bottom + 4) + 'px';
+
+        _activeMenu = menu;
+        setTimeout(function() { document.addEventListener('mousedown', _onDocClickCloseMenu); }, 0);
+    }
+
+    var LegendControl = L.Control.extend({
+        onAdd: function() {
+            var div = L.DomUtil.create('div', 'geo-legend');
+            L.DomEvent.disableClickPropagation(div);
+            L.DomEvent.disableScrollPropagation(div);
+
+            var header = document.createElement('div');
+            header.className = 'geo-legend-header';
+
+            var toggleAll = document.createElement('input');
+            toggleAll.type = 'checkbox';
+            toggleAll.checked = true;
+            toggleAll.title = 'Toggle all layers';
+            toggleAll.style.cssText = 'margin:0;cursor:pointer;';
+            header.appendChild(toggleAll);
+
+            var toggle = document.createElement('div');
+            toggle.className = 'geo-legend-toggle';
+            var tIcon = document.createElement('i');
+            tIcon.className = 'fas fa-layer-group';
+            toggle.appendChild(tIcon);
+            toggle.appendChild(document.createTextNode(' Layers'));
+            header.appendChild(toggle);
+
+            div.appendChild(header);
+
+            var body = document.createElement('div');
+            body.className = 'geo-legend-body collapsed';
+            _legendBody = body;
+            div.appendChild(body);
+
+            var lm = window.layerManager;
+            lm.getSlotIds().forEach(function(id) {
+                body.appendChild(_buildLegendItem(lm.getSlot(id)));
+            });
+
+            toggleAll.addEventListener('change', function() {
+                var checked = toggleAll.checked;
+                body.querySelectorAll('.geo-legend-item input[type=checkbox]').forEach(function(cb) {
+                    if (cb.checked !== checked) {
+                        cb.checked = checked;
+                        cb.dispatchEvent(new Event('change'));
+                    }
+                });
+            });
+
+            toggle.addEventListener('click', function() { body.classList.toggle('collapsed'); });
+
+            if (typeof Sortable !== 'undefined') {
+                Sortable.create(body, {
+                    animation: 150,
+                    handle: '.geo-drag-handle',
+                    draggable: '.geo-legend-item',
+                    ghostClass: 'sortable-ghost',
+                    onEnd: function() {
+                        var newOrder = [];
+                        body.querySelectorAll('.geo-legend-item').forEach(function(el) {
+                            newOrder.push(el.dataset.layerId);
+                        });
+                        lm.reorder(newOrder);
+                    }
+                });
+            }
+
+            return div;
+        }
+    });
+    new LegendControl({ position: 'topleft' }).addTo(map);
+});
+</script>

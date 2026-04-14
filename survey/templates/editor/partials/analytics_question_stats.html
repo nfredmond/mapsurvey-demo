@@ -1,0 +1,253 @@
+{% load survey_filters %}
+
+<h6 style="font-weight:700; margin-bottom:0.75rem;">Question Statistics</h6>
+
+{% for stat in question_stats %}
+<div class="analytics-section">
+    <div class="q-stat-header">
+        <div>
+            <strong style="font-size:0.95rem;">{{ stat.question.name }}</strong>
+            <br><small class="text-muted">{{ stat.section.title|default:stat.section.name }}</small>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.4rem;">
+            <span class="badge badge-secondary">{{ stat.question.input_type }}</span>
+            <button class="expand-btn" onclick="enterFocusMode(this.closest('.analytics-section'))"><i class="fas fa-expand"></i></button>
+        </div>
+    </div>
+
+    {% if stat.type == 'choices' %}
+    <div class="q-filter-pills" data-qid="{{ stat.question.id }}" style="display:none;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.4rem;"></div>
+    <p class="mb-1"><small class="text-muted">{{ stat.total_answers }} answer{{ stat.total_answers|pluralize }}</small></p>
+    <canvas id="chart-q-{{ stat.question.id }}" height="50" style="cursor:pointer;"></canvas>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        var qid = '{{ stat.question.id }}';
+        var codes = JSON.parse('{{ stat.choice_codes_json|escapejs }}');
+        var labels = JSON.parse('{{ stat.choice_labels_json|escapejs }}');
+
+        window.analyticsChartCodes.set(qid, codes);
+        window.analyticsQuestionNames.set(qid, '{{ stat.question.name|escapejs }}');
+        for (var i = 0; i < codes.length; i++) {
+            window.analyticsChoiceLabels.set(qid + ':' + codes[i], labels[i]);
+        }
+
+        var chart = new Chart(document.getElementById('chart-q-' + qid), {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: JSON.parse('{{ stat.choice_counts_json|escapejs }}'),
+                    backgroundColor: 'rgba(79, 70, 229, 0.7)',
+                    borderRadius: 4,
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { beginAtZero: true, ticks: { precision: 0 } }
+                },
+                onClick: function(event, elements) {
+                    if (!elements.length) return;
+                    var idx = elements[0].index;
+                    var code = codes[idx];
+                    var fm = window.filterManager;
+                    var sm = window.selectionManager;
+                    if (!fm || !sm) return;
+                    var vis = fm.getVisibleSids();
+                    var matchIds = [];
+                    fm._visibleMatrix().forEach(function(session) {
+                        if (vis !== null && !vis.has(session.sid)) return;
+                        var sc = session.a[qid];
+                        if (sc && sc.indexOf(code) !== -1) matchIds.push(session.sid);
+                    });
+                    var ctrlKey = event.native && event.native.ctrlKey;
+                    if (ctrlKey) {
+                        // Ctrl+click: toggle these sessions in current selection
+                        var prev = sm.getSelected();
+                        var allIn = matchIds.length > 0 && matchIds.every(function(id) { return prev.has(id); });
+                        if (allIn) { sm.deselect(matchIds); } else { sm.select(matchIds); }
+                    } else {
+                        var prev = sm.getSelected();
+                        var same = matchIds.length > 0 && matchIds.length === prev.size && matchIds.every(function(id) { return prev.has(id); });
+                        if (same) { sm.clear(); } else { sm.setSelection(matchIds); }
+                    }
+                }
+            }
+        });
+        window.analyticsCharts.set(qid, chart);
+    });
+    </script>
+
+    {% elif stat.type == 'number' %}
+    <div class="number-stats" data-num-stats="{{ stat.question.id }}">
+        <div class="ns-item">
+            <div class="ns-value" data-ns="count">{{ stat.count }}</div>
+            <div class="ns-label">Answers</div>
+        </div>
+        <div class="ns-item">
+            <div class="ns-value" data-ns="avg">{{ stat.avg|default:"–" }}</div>
+            <div class="ns-label">Average</div>
+        </div>
+        <div class="ns-item">
+            <div class="ns-value" data-ns="median">{{ stat.median|default:"–" }}</div>
+            <div class="ns-label">Median</div>
+        </div>
+        <div class="ns-item">
+            <div class="ns-value" data-ns="min">{{ stat.min_val|default:"–" }}</div>
+            <div class="ns-label">Min</div>
+        </div>
+        <div class="ns-item">
+            <div class="ns-value" data-ns="max">{{ stat.max_val|default:"–" }}</div>
+            <div class="ns-label">Max</div>
+        </div>
+    </div>
+    {% if stat.hist_labels_json %}
+    <div class="q-filter-pills" data-qid="num-{{ stat.question.id }}" style="display:none;flex-wrap:wrap;gap:0.3rem;margin-top:0.5rem;"></div>
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;">
+        <label style="font-size:0.75rem;color:#9ca3af;margin:0;">Step:</label>
+        <input type="number" id="bin-step-{{ stat.question.id }}" class="form-control form-control-sm"
+               style="width:70px;font-size:0.78rem;" min="0.1" step="any">
+    </div>
+    <div id="hist-container-{{ stat.question.id }}" style="position:relative;user-select:none;margin-top:0.5rem;">
+        <canvas id="hist-q-{{ stat.question.id }}" height="40"></canvas>
+    </div>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        var qid = '{{ stat.question.id }}';
+        var allValues = [];
+        var minVal = {{ stat.min_val }}, maxVal = {{ stat.max_val }};
+        window.analyticsQuestionNames.set(qid, '{{ stat.question.name|escapejs }}');
+
+        // Collect all numeric values from matrix for dynamic rebinning
+        var matrixEl = document.getElementById('answer-matrix-data');
+        var matrix = JSON.parse(matrixEl.textContent);
+        matrix.forEach(function(s) { if (s.n && s.n[qid] !== undefined) allValues.push(s.n[qid]); });
+
+        function computeBinsFromStep(step) {
+            if (!allValues.length || minVal === maxVal) return { labels: [String(minVal)], counts: [allValues.length], bins: [[minVal, maxVal]] };
+            var nBins = Math.max(1, Math.min(50, Math.ceil((maxVal - minVal) / step)));
+            var labels = [], bins = [], counts = new Array(nBins).fill(0);
+            for (var i = 0; i < nBins; i++) {
+                var lo = minVal + i * step, hi = Math.min(lo + step, maxVal);
+                bins.push([Math.round(lo*100)/100, Math.round(hi*100)/100]);
+                labels.push(step >= 1 ? Math.round(lo) + '-' + Math.round(hi) : lo.toFixed(1) + '-' + hi.toFixed(1));
+            }
+            allValues.forEach(function(v) {
+                var idx = Math.min(Math.floor((v - minVal) / step), nBins - 1);
+                counts[idx]++;
+            });
+            return { labels: labels, counts: counts, bins: bins };
+        }
+
+        // Default step: Sturges' rule
+        var defaultBins = Math.max(5, Math.ceil(Math.log2(allValues.length) + 1));
+        var defaultStep = Math.round((maxVal - minVal) / defaultBins * 10) / 10 || 1;
+        var stepInput = document.getElementById('bin-step-' + qid);
+        stepInput.value = defaultStep;
+
+        var histData = computeBinsFromStep(defaultStep);
+        window.analyticsHistBins.set(qid, histData.bins);
+
+        var histChart = new Chart(document.getElementById('hist-q-' + qid), {
+            type: 'bar',
+            data: {
+                labels: histData.labels,
+                datasets: [{ data: histData.counts, backgroundColor: 'rgba(79, 70, 229, 0.5)', borderColor: 'rgba(79, 70, 229, 0.8)', borderWidth: 1, borderRadius: 2 }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { x: { ticks: { font: { size: 10 }, maxRotation: 45 } }, y: { beginAtZero: true, ticks: { precision: 0 } } }
+            }
+        });
+        window.analyticsHistCharts.set(qid, histChart);
+
+        stepInput.addEventListener('change', function() {
+            var step = Math.max(0.1, parseFloat(this.value) || defaultStep);
+            this.value = step;
+            histData = computeBinsFromStep(step);
+            window.analyticsHistBins.set(qid, histData.bins);
+            histChart.data.labels = histData.labels;
+            histChart.data.datasets[0].data = histData.counts;
+            histChart.data.datasets[0].backgroundColor = 'rgba(79, 70, 229, 0.5)';
+            histChart.update('none');
+        });
+
+        // Range slider
+        var container = document.getElementById('hist-container-' + qid);
+
+        function pctToValue(pct) {
+            return Math.round((minVal + pct * (maxVal - minVal)) * 10) / 10;
+        }
+        function valueToPct(val) {
+            if (maxVal === minVal) return 0;
+            return Math.max(0, Math.min(1, (val - minVal) / (maxVal - minVal)));
+        }
+
+        var slider = new RangeSlider(container, {
+            formatValue: pctToValue,
+            parseInput: function(lo, hi) {
+                lo = parseFloat(lo); hi = parseFloat(hi);
+                if (isNaN(lo)) lo = minVal;
+                if (isNaN(hi)) hi = maxVal;
+                lo = Math.max(minVal, Math.min(maxVal, lo));
+                hi = Math.max(minVal, Math.min(maxVal, hi));
+                if (lo > hi) { var tmp = lo; lo = hi; hi = tmp; }
+                return { left: valueToPct(lo), right: valueToPct(hi) };
+            },
+            onFilter: function(left, right) {
+                var fm = window.filterManager;
+                var sm = window.selectionManager;
+                if (!fm || !sm) return;
+                if (left <= 0.001 && right >= 0.999) {
+                    sm.clear();
+                } else {
+                    var lo = pctToValue(left), hi = pctToValue(right);
+                    var vis = fm.getVisibleSids();
+                    var matchIds = [];
+                    fm._visibleMatrix().forEach(function(session) {
+                        if (vis !== null && !vis.has(session.sid)) return;
+                        var val = session.n ? session.n[qid] : undefined;
+                        if (val === undefined) return;
+                        if (val >= lo && val <= hi) matchIds.push(session.sid);
+                    });
+                    sm.setSelection(matchIds);
+                }
+            },
+        });
+
+        // Reset handler
+        if (!window._resetNumericHandles) window._resetNumericHandles = function() {};
+        var origReset = window._resetNumericHandles;
+        window._resetNumericHandles = function(targetQid) {
+            if (targetQid === qid) {
+                slider.reset();
+                if (window.selectionManager) window.selectionManager.clear();
+            }
+            origReset(targetQid);
+        };
+    });
+    </script>
+    {% endif %}
+
+    {% elif stat.type == 'text' %}
+    <p class="mb-1"><small class="text-muted">{{ stat.total_answers }} text answer{{ stat.total_answers|pluralize }}</small></p>
+    <div id="text-answers-{{ stat.question.id }}"
+         hx-get="{% url 'analytics_text_answers' survey.uuid stat.question.id %}"
+         hx-trigger="revealed"
+         hx-swap="innerHTML">
+        <span class="text-muted" style="font-size:0.85rem;">Loading...</span>
+    </div>
+
+    {% elif stat.type == 'geo' %}
+    <p class="mb-1"><small class="text-muted">{{ stat.total_answers }} geo feature{{ stat.total_answers|pluralize }} — see map above</small></p>
+
+    {% else %}
+    <p class="mb-1"><small class="text-muted">{{ stat.total_answers }} answer{{ stat.total_answers|pluralize }}</small></p>
+    {% endif %}
+</div>
+{% empty %}
+<p class="text-muted">No questions in this survey.</p>
+{% endfor %}
