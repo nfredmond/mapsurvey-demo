@@ -1,2 +1,0 @@
-# Vercel fallback app uses only the Python standard library.
-# Full Django/GeoDjango dependencies are managed by Pipfile/Pipfile.lock for Docker hosts.
