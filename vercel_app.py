@@ -1007,6 +1007,12 @@ def _layout(title, body):
     .staff-item strong {{ display: block; margin-bottom: 4px; }}
     .staff-item span {{ display: block; color: var(--muted); line-height: 1.4; }}
     .export-row {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }}
+    .content-page {{ padding: 34px clamp(18px, 5vw, 72px); }}
+    .content-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 22px; }}
+    .content-card {{ border: 1px solid var(--line); border-radius: 8px; background: white; padding: 18px; }}
+    .content-card h2 {{ margin: 0 0 8px; font-size: 24px; }}
+    .content-card p, .content-card li {{ color: var(--muted); line-height: 1.45; }}
+    .content-card ol, .content-card ul {{ margin: 10px 0 0; padding-left: 20px; }}
     .report-page {{ padding: 34px clamp(18px, 5vw, 72px); }}
     .report-section {{ border-top: 1px solid var(--line); padding: 22px 0; }}
     .report-section h2 {{ margin: 0 0 10px; font-size: 28px; }}
@@ -1025,6 +1031,7 @@ def _layout(title, body):
       .panel {{ border-right: 0; border-bottom: 1px solid var(--line); }}
       .map-wrap {{ min-height: 560px; }}
       .dashboard-grid {{ grid-template-columns: 1fr; }}
+      .content-grid {{ grid-template-columns: 1fr; }}
       .map-tools {{ position: relative; top: auto; left: auto; right: auto; margin: 10px; }}
     }}
   </style>
@@ -1037,16 +1044,22 @@ def _home():
     return _layout("Bike Better San Diego", f"""
 <nav class="nav">
   <div class="brand">Bike Better San Diego</div>
-  <a href="/survey">Open engagement map</a>
+  <div class="actions">
+    <a href="/survey">Public tools</a>
+    <a href="/staff">Staff dashboard</a>
+    <a href="/about">Platform vision</a>
+    <a href="/demo">Demo script</a>
+  </div>
 </nav>
 <main>
   <section class="hero">
     <div class="hero-copy">
       <div class="eyebrow">San Diego County Bicycle Coalition</div>
-      <h1>Turn rider stories into safer streets.</h1>
-      <p class="lead">Bring participation tools, visual project pages, and built-in reporting together so community feedback becomes clear insight for better bike decisions.</p>
+      <h1>Countywide Bike Safety Listening Map.</h1>
+      <p class="lead">Help identify the streets, crossings, and gaps that keep people from riding. Public input can support advocacy, grant priorities, agency conversations, and safer project decisions.</p>
       <div class="actions">
-        <a class="button" href="/survey">Launch the map</a>
+        <a class="button" href="/survey">Start participating</a>
+        <a class="button secondary" href="/report">View report</a>
         <a class="button secondary" href="https://sdbikecoalition.org/">Visit SDBC</a>
       </div>
     </div>
@@ -1068,16 +1081,25 @@ def _survey():
     body = """
 <nav class="nav">
   <div class="brand">Bike Better San Diego</div>
-  <a href="/">Overview</a>
+  <div class="actions">
+    <a href="/staff">Staff dashboard</a>
+    <a href="/report">Report</a>
+    <a href="/">Overview</a>
+  </div>
 </nav>
 <main class="workspace">
   <aside class="panel">
-    <div class="eyebrow">Map safety concerns</div>
-    <h1>Click the map to add a comment.</h1>
-    <p class="lead">Click the exact place where biking feels unsafe, unclear, or disconnected. Each comment helps shape better project decisions.</p>
+    <div class="eyebrow">Countywide Bike Safety Listening Map</div>
+    <h1>Show where biking feels unsafe, disconnected, or hard.</h1>
+    <p class="lead">Add a map comment, answer the quick poll, or share a short story. The Coalition can use this input for advocacy, grants, agency conversations, and public reporting.</p>
     <div class="step"><strong>1. Click the map</strong>A popup will open at that location.</div>
     <div class="step"><strong>2. Add details</strong>Choose an issue type, add a note, and attach a photo if useful.</div>
     <div class="step"><strong>3. Review your input</strong>You can edit or remove entries submitted from this browser.</div>
+    <section class="tool-panel">
+      <span class="status-pill">Privacy and trust</span>
+      <h2>Before you submit</h2>
+      <p>No login is required. Comments may appear publicly on the map and in reports. Do not include private personal information. Optional email is used only for follow-up. Public input may be summarized for planning, advocacy, grants, public records, and agency conversations.</p>
+    </section>
     <section class="review-panel">
       <span class="status-pill" id="savedStatus">Saved to the project map</span>
       <p class="lead">Review your mapped comments. You can edit or remove entries submitted from this browser.</p>
@@ -1098,7 +1120,7 @@ def _survey():
     <section class="tool-panel">
       <span class="status-pill">Project hub</span>
       <h2 id="projectTitle">Bike Better San Diego</h2>
-      <p id="projectDescription">Map issues, answer the priority poll, and share a short project comment.</p>
+      <p id="projectDescription">A countywide listening campaign for bike safety, low-stress connections, school access, maintenance priorities, and better public reporting.</p>
       <div class="tool-grid">
         <div class="tool-stat"><strong id="countMap">0</strong><span>map comments</span></div>
         <div class="tool-stat"><strong id="countSurvey">0</strong><span>survey responses</span></div>
@@ -2139,6 +2161,122 @@ document.querySelectorAll('[data-demo-action]').forEach((button) => {
     return _layout("Bike Better San Diego Staff Dashboard", body)
 
 
+def _about():
+    body = """
+<nav class="nav">
+  <div class="brand">Bike Better San Diego</div>
+  <div class="actions">
+    <a href="/survey">Public tools</a>
+    <a href="/staff">Staff dashboard</a>
+    <a href="/demo">Demo script</a>
+  </div>
+</nav>
+<main class="content-page">
+  <section class="dashboard-head">
+    <div class="eyebrow">Platform vision</div>
+    <h1>Input to insight to impact.</h1>
+    <p class="lead">This platform brings participation tools, project pages, AI-assisted analysis, reporting, and decision traceability into one place so community feedback can shape better transportation outcomes.</p>
+  </section>
+  <section class="content-grid">
+    <article class="content-card">
+      <h2>Public Participation</h2>
+      <p>Residents participate without creating an account. The current campaign includes mapped comments, photo-capable issue reporting, a quick priority poll, a short survey, and public conversation prompts.</p>
+    </article>
+    <article class="content-card">
+      <h2>Visual Project Pages</h2>
+      <p>Each project can explain the purpose, timeline, input window, participation tools, and what happens next. The public sees one clear hub instead of disconnected forms and spreadsheets.</p>
+    </article>
+    <article class="content-card">
+      <h2>AI Insight Engine</h2>
+      <p>Natural language processing summarizes comments, surfaces themes, estimates sentiment, and recommends follow-up actions while keeping raw input available for audit and review.</p>
+    </article>
+    <article class="content-card">
+      <h2>GIS and Reporting</h2>
+      <p>Staff can export GeoJSON, CSV, and JSON, review a live dashboard, and generate a printable report for board packets, agency meetings, grant narratives, and public reporting.</p>
+    </article>
+    <article class="content-card">
+      <h2>Decision Traceability</h2>
+      <p>The data model links projects, tools, responses, decisions, and audit events so teams can show how public input moved from comment to theme to action.</p>
+    </article>
+    <article class="content-card">
+      <h2>Expandable Modules</h2>
+      <p>Next modules can include multilingual access, Q&A with official responses, budget allocation, idea boards, campaign emails, SMS reminders, moderation workflows, and role-based permissions.</p>
+    </article>
+  </section>
+</main>"""
+    return _layout("Bike Better San Diego Platform Vision", body)
+
+
+def _demo():
+    body = """
+<nav class="nav">
+  <div class="brand">Bike Better San Diego</div>
+  <div class="actions">
+    <a href="/survey">Public tools</a>
+    <a href="/staff">Staff dashboard</a>
+    <a href="/report">Report</a>
+  </div>
+</nav>
+<main class="content-page">
+  <section class="dashboard-head">
+    <div class="eyebrow">Demo script</div>
+    <h1>Seven-minute walkthrough.</h1>
+    <p class="lead">Use this sequence to show the full loop: community input, live analysis, GIS export, and report-ready outcomes.</p>
+  </section>
+  <section class="content-grid">
+    <article class="content-card">
+      <h2>1. Public Input</h2>
+      <ol>
+        <li>Open <strong>/survey</strong>.</li>
+        <li>Show the seeded comments across San Diego County.</li>
+        <li>Switch from pins to clusters, then heatmap.</li>
+        <li>Filter to dangerous crossings.</li>
+        <li>Click the map and show the popup wizard.</li>
+      </ol>
+    </article>
+    <article class="content-card">
+      <h2>2. Participation Tools</h2>
+      <ol>
+        <li>Point out no-login participation.</li>
+        <li>Show privacy and trust copy.</li>
+        <li>Vote in the quick poll.</li>
+        <li>Show the short project survey.</li>
+        <li>Show the conversation prompt.</li>
+      </ol>
+    </article>
+    <article class="content-card">
+      <h2>3. Staff View</h2>
+      <ol>
+        <li>Open <strong>/staff</strong>.</li>
+        <li>Review participation counts.</li>
+        <li>Show AI-powered insight brief.</li>
+        <li>Show top themes and poll results.</li>
+        <li>Read the planner-mode draft.</li>
+      </ol>
+    </article>
+    <article class="content-card">
+      <h2>4. Reporting</h2>
+      <ol>
+        <li>Open <strong>/report</strong>.</li>
+        <li>Show the printable “What We Heard” summary.</li>
+        <li>Click Print or save PDF.</li>
+        <li>Open the GeoJSON export.</li>
+        <li>Explain how this supports board, grant, and agency conversations.</li>
+      </ol>
+    </article>
+    <article class="content-card">
+      <h2>Positioning</h2>
+      <p>“This is a production engagement mapping and insight tool for the San Diego County Bicycle Coalition. It collects structured and unstructured feedback, analyzes it in real time, exports GIS-ready records, and turns community stories into action-ready planning evidence.”</p>
+    </article>
+    <article class="content-card">
+      <h2>Close</h2>
+      <p>Ask which real campaign should be first: countywide safety listening, a corridor campaign, Safe Routes to School, e-bike safety, or a grant-priority engagement push.</p>
+    </article>
+  </section>
+</main>"""
+    return _layout("Bike Better San Diego Demo Script", body)
+
+
 def _report_page():
     body = """
 <nav class="nav">
@@ -2295,6 +2433,10 @@ def app(environ, start_response):
         return _response(start_response, "200 OK", _survey())
     if path in ("/staff", "/staff/"):
         return _response(start_response, "200 OK", _staff())
+    if path in ("/about", "/about/"):
+        return _response(start_response, "200 OK", _about())
+    if path in ("/demo", "/demo/"):
+        return _response(start_response, "200 OK", _demo())
     if path in ("/report", "/report/"):
         return _response(start_response, "200 OK", _report_page())
     if path == "/healthz":
