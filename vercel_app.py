@@ -133,6 +133,32 @@ def _public_pin(pin):
     }
 
 
+def _pin_feature(pin):
+    public = _public_pin(pin)
+    return {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [public["lng"], public["lat"]],
+        },
+        "properties": {
+            "id": public["id"],
+            "created_at": public["created_at"],
+            "category": public["category"],
+            "title": public["title"],
+            "note": public["note"],
+        },
+    }
+
+
+def _geojson(rows):
+    return {
+        "type": "FeatureCollection",
+        "name": "bike-better-san-diego-map-comments",
+        "features": [_pin_feature(row) for row in rows if row.get("lng") is not None and row.get("lat") is not None],
+    }
+
+
 def _project_record():
     rows = _supabase_request(
         "GET",
@@ -476,6 +502,8 @@ def _api_report(start_response, fmt):
         if fmt == "json":
             insights = _fallback_insights(rows)
             return _json_response(start_response, "200 OK", {"pins": [_public_pin(row) for row in rows], "insights": insights})
+        if fmt == "geojson":
+            return _json_response(start_response, "200 OK", _geojson(rows))
         header = ["id", "created_at", "category", "title", "note", "lng", "lat"]
         lines = [",".join(header)]
         for row in rows:
@@ -693,6 +721,24 @@ def _layout(title, body):
       font-weight: 700;
       z-index: 2;
     }}
+    .map-tools {{
+      position: absolute;
+      top: 18px;
+      left: 18px;
+      right: 18px;
+      z-index: 3;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: end;
+      max-width: 720px;
+      background: rgba(255,255,255,.95);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+    }}
+    .map-tools label {{ display: grid; gap: 5px; font-size: 12px; font-weight: 800; color: var(--muted); }}
+    .map-tools select {{ min-width: 170px; min-height: 38px; padding: 6px 8px; }}
     .pin {{
       position: absolute;
       width: 22px;
@@ -742,12 +788,26 @@ def _layout(title, body):
     }}
     .modal .screen {{ margin-top: 14px; }}
     .modal-footer {{ margin-top: 16px; }}
+    .dashboard {{ padding: 30px clamp(18px, 4vw, 56px); }}
+    .dashboard-head {{ display: grid; gap: 10px; max-width: 980px; margin-bottom: 22px; }}
+    .dashboard h1 {{ font-size: clamp(34px, 5vw, 58px); line-height: 1; margin: 0; }}
+    .dashboard-grid {{ display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; align-items: start; }}
+    .dashboard-card {{ border: 1px solid var(--line); border-radius: 8px; background: white; padding: 18px; }}
+    .dashboard-card h2 {{ margin: 0 0 10px; font-size: 24px; }}
+    .wide-card {{ grid-column: 1 / -1; }}
+    .staff-list {{ display: grid; gap: 10px; }}
+    .staff-item {{ border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--paper); }}
+    .staff-item strong {{ display: block; margin-bottom: 4px; }}
+    .staff-item span {{ display: block; color: var(--muted); line-height: 1.4; }}
+    .export-row {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }}
     @media (max-width: 780px) {{
       .hero, .workspace {{ grid-template-columns: 1fr; }}
       .hero {{ min-height: auto; }}
       .metrics {{ grid-template-columns: 1fr 1fr; }}
       .panel {{ border-right: 0; border-bottom: 1px solid var(--line); }}
       .map-wrap {{ min-height: 560px; }}
+      .dashboard-grid {{ grid-template-columns: 1fr; }}
+      .map-tools {{ position: relative; top: auto; left: auto; right: auto; margin: 10px; }}
     }}
   </style>
 </head>
@@ -885,6 +945,21 @@ def _survey():
   </aside>
   <section class="map-wrap">
     <div id="map"><div class="fallback-map"></div></div>
+    <div class="map-tools" aria-label="Map display controls">
+      <label>Filter by issue
+        <select id="categoryFilter">
+          <option value="">All issues</option>
+        </select>
+      </label>
+      <label>Map view
+        <select id="mapMode">
+          <option value="pins">Pins</option>
+          <option value="clusters">Clusters</option>
+          <option value="heatmap">Heatmap</option>
+        </select>
+      </label>
+      <a class="small-button" href="/api/report.geojson">GeoJSON</a>
+    </div>
     <div class="map-note" id="note">Click the map to open the input form.</div>
   </section>
 </main>
@@ -976,6 +1051,8 @@ let editingId = null;
 let draftMarker = null;
 let fallbackPins = new Map();
 let mapMarkers = new Map();
+let mapLayersReady = false;
+let suppressNextMapClick = false;
 
 const titles = {
   type: 'Add a bike safety comment.',
@@ -986,6 +1063,11 @@ const steps = { type: 1, details: 2, confirm: 3 };
 
 function allPins() {
   return pins;
+}
+
+function filteredPins() {
+  const category = document.getElementById('categoryFilter')?.value || '';
+  return category ? pins.filter((pin) => pin.category === category) : pins;
 }
 
 function ownedPins() {
@@ -1013,12 +1095,24 @@ async function loadPins() {
   try {
     const data = await api('/api/pins');
     pins = data.pins || [];
+    renderCategoryFilter();
     renderMarkers();
     renderList();
     setNote(pins.length ? 'Public input loaded. Use the wizard to add your own comment.' : 'No public comments yet. Add the first mapped concern.');
   } catch (error) {
     setNote('The public map is temporarily unable to load saved comments. You can still review this page and try again shortly.');
   }
+}
+
+function renderCategoryFilter() {
+  const select = document.getElementById('categoryFilter');
+  if (!select) return;
+  const selected = select.value;
+  const categories = [...new Set(pins.map((pin) => pin.category).filter(Boolean))].sort();
+  select.innerHTML = '<option value="">All issues</option>' + categories.map((category) => `
+    <option value="${escapeHtml(category)}">${escapeHtml(category)}</option>
+  `).join('');
+  if (categories.includes(selected)) select.value = selected;
 }
 
 async function loadInsights() {
@@ -1236,24 +1330,146 @@ function addFallbackPin(pin, isDraft = false) {
   return marker;
 }
 
+function pinsGeoJson() {
+  return {
+    type: 'FeatureCollection',
+    features: filteredPins()
+      .filter((pin) => pin.lng !== null && pin.lat !== null)
+      .map((pin) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [pin.lng, pin.lat] },
+        properties: {
+          id: pin.id,
+          category: pin.category || 'Uncategorized',
+          title: pin.title || pin.category || 'Bike safety concern',
+          note: pin.note || ''
+        }
+      }))
+  };
+}
+
+function layerVisibility(mode, layer) {
+  if (mode === 'heatmap') return layer === 'pins-heatmap' ? 'visible' : 'none';
+  if (mode === 'clusters') return layer === 'pins-heatmap' ? 'none' : 'visible';
+  if (layer === 'unclustered-pins') return 'visible';
+  return 'none';
+}
+
+function ensureMapLayers() {
+  if (!map || mapLayersReady || !map.loaded()) return;
+  map.addSource('engagement-pins', {
+    type: 'geojson',
+    data: pinsGeoJson(),
+    cluster: true,
+    clusterRadius: 52,
+    clusterMaxZoom: 14
+  });
+  map.addLayer({
+    id: 'pins-heatmap',
+    type: 'heatmap',
+    source: 'engagement-pins',
+    maxzoom: 16,
+    paint: {
+      'heatmap-weight': 1,
+      'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 8, 0.7, 14, 1.7],
+      'heatmap-color': [
+        'interpolate', ['linear'], ['heatmap-density'],
+        0, 'rgba(36,107,178,0)',
+        0.25, 'rgba(36,107,178,.5)',
+        0.55, 'rgba(12,122,77,.7)',
+        0.85, 'rgba(255,212,71,.85)',
+        1, 'rgba(217,54,54,.95)'
+      ],
+      'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 8, 18, 14, 34],
+      'heatmap-opacity': 0
+    }
+  });
+  map.addLayer({
+    id: 'pin-clusters',
+    type: 'circle',
+    source: 'engagement-pins',
+    filter: ['has', 'point_count'],
+    paint: {
+      'circle-color': ['step', ['get', 'point_count'], '#246bb2', 10, '#0c7a4d', 30, '#d93636'],
+      'circle-radius': ['step', ['get', 'point_count'], 18, 10, 24, 30, 32],
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 2
+    }
+  });
+  map.addLayer({
+    id: 'cluster-count',
+    type: 'symbol',
+    source: 'engagement-pins',
+    filter: ['has', 'point_count'],
+    layout: {
+      'text-field': ['get', 'point_count_abbreviated'],
+      'text-size': 12
+    },
+    paint: { 'text-color': '#ffffff' }
+  });
+  map.addLayer({
+    id: 'unclustered-pins',
+    type: 'circle',
+    source: 'engagement-pins',
+    filter: ['!', ['has', 'point_count']],
+    paint: {
+      'circle-color': '#d93636',
+      'circle-radius': 7,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 2
+    }
+  });
+  map.on('click', 'pin-clusters', (event) => {
+    suppressNextMapClick = true;
+    const features = map.queryRenderedFeatures(event.point, { layers: ['pin-clusters'] });
+    const clusterId = features[0]?.properties?.cluster_id;
+    if (clusterId === undefined) return;
+    map.getSource('engagement-pins').getClusterExpansionZoom(clusterId, (error, zoom) => {
+      if (error) return;
+      map.easeTo({ center: features[0].geometry.coordinates, zoom });
+    });
+  });
+  map.on('click', 'unclustered-pins', (event) => {
+    suppressNextMapClick = true;
+    const feature = event.features && event.features[0];
+    if (!feature) return;
+    const id = feature.properties.id;
+    const pin = pins.find((item) => item.id === id);
+    if (!pin) return;
+    new mapboxgl.Popup().setLngLat(feature.geometry.coordinates).setHTML(popupHtml(pin)).addTo(map);
+    if (ownedIds.has(id)) setTimeout(() => editPin(id), 0);
+  });
+  ['pin-clusters', 'unclustered-pins'].forEach((layer) => {
+    map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
+  });
+  mapLayersReady = true;
+}
+
+function updateMapLayers() {
+  if (!map) return;
+  ensureMapLayers();
+  const source = map.getSource('engagement-pins');
+  if (!source) return;
+  source.setData(pinsGeoJson());
+  const mode = document.getElementById('mapMode')?.value || 'pins';
+  ['pins-heatmap', 'pin-clusters', 'cluster-count', 'unclustered-pins'].forEach((layer) => {
+    if (map.getLayer(layer)) {
+      map.setLayoutProperty(layer, 'visibility', layerVisibility(mode, layer));
+      if (layer === 'pins-heatmap') map.setPaintProperty(layer, 'heatmap-opacity', mode === 'heatmap' ? 0.82 : 0);
+    }
+  });
+}
+
 function renderMarkers() {
   mapMarkers.forEach((marker) => marker.remove());
   mapMarkers.clear();
   fallbackPins.forEach((marker) => marker.remove());
   fallbackPins.clear();
   if (map) {
-    allPins().forEach((pin) => {
-      const marker = new mapboxgl.Marker({ color: '#d93636' })
-        .setLngLat([pin.lng, pin.lat])
-        .setPopup(new mapboxgl.Popup().setHTML(popupHtml(pin)))
-        .addTo(map);
-      marker.getElement().addEventListener('click', () => {
-        if (ownedIds.has(pin.id)) setTimeout(() => editPin(pin.id), 0);
-      });
-      mapMarkers.set(pin.id, marker);
-    });
+    updateMapLayers();
   } else {
-    allPins().forEach((pin) => fallbackPins.set(pin.id, addFallbackPin(pin)));
+    filteredPins().forEach((pin) => fallbackPins.set(pin.id, addFallbackPin(pin)));
   }
 }
 
@@ -1410,6 +1626,10 @@ async function saveDraft() {
 
 function handleMapClick(event) {
   if (document.getElementById('pinModal').classList.contains('open')) return;
+  if (suppressNextMapClick) {
+    suppressNextMapClick = false;
+    return;
+  }
   if (event.lngLat) beginNew(event.lngLat, null);
 }
 
@@ -1437,6 +1657,9 @@ document.querySelectorAll('[data-action]').forEach((button) => {
 document.getElementById('issueType').addEventListener('change', (event) => {
   document.getElementById('otherTypeField').hidden = event.target.value !== 'Other';
 });
+
+document.getElementById('categoryFilter').addEventListener('change', renderMarkers);
+document.getElementById('mapMode').addEventListener('change', renderMarkers);
 
 document.getElementById('pinList').addEventListener('click', (event) => {
   const editButton = event.target.closest('[data-edit]');
@@ -1490,7 +1713,10 @@ if (token && window.mapboxgl) {
     zoom: 11.2
   });
   map.addControl(new mapboxgl.NavigationControl({ showCompass: false }));
-  map.on('load', renderMarkers);
+  map.on('load', () => {
+    ensureMapLayers();
+    renderMarkers();
+  });
   map.on('click', handleMapClick);
 } else {
   document.querySelector('.map-wrap').addEventListener('click', (event) => {
@@ -1512,6 +1738,153 @@ loadDiscussion();
     return _layout("Bike Better San Diego Survey", body.replace("__MAPBOX_TOKEN__", token_js))
 
 
+def _staff():
+    body = """
+<nav class="nav">
+  <div class="brand">Bike Better San Diego</div>
+  <div class="actions">
+    <a href="/survey">Public tools</a>
+    <a href="/">Overview</a>
+  </div>
+</nav>
+<main class="dashboard">
+  <section class="dashboard-head">
+    <div class="eyebrow">Staff dashboard</div>
+    <h1>Turn community input into action.</h1>
+    <p class="lead">Review live participation, export GIS-ready records, and draft planning language from mapped comments, poll results, survey responses, and conversations.</p>
+  </section>
+  <section class="metrics" aria-label="Engagement totals">
+    <div class="metric"><strong id="staffMap">0</strong><span>map comments</span></div>
+    <div class="metric"><strong id="staffSurvey">0</strong><span>survey responses</span></div>
+    <div class="metric"><strong id="staffPoll">0</strong><span>poll votes</span></div>
+    <div class="metric"><strong id="staffDiscussion">0</strong><span>conversation posts</span></div>
+  </section>
+  <section class="dashboard-grid" style="margin-top:18px">
+    <article class="dashboard-card">
+      <span class="status-pill" id="staffInsightSource">Live reporting</span>
+      <h2>Insight brief</h2>
+      <p class="insight-summary" id="staffSummary">Loading insight brief...</p>
+      <div class="insight-grid">
+        <div class="insight-stat"><strong id="staffNegative">0</strong><span>urgent</span></div>
+        <div class="insight-stat"><strong id="staffMixed">0</strong><span>mixed</span></div>
+        <div class="insight-stat"><strong id="staffPositive">0</strong><span>positive</span></div>
+      </div>
+      <div class="staff-list" id="staffActions"></div>
+    </article>
+    <article class="dashboard-card">
+      <h2>Exports</h2>
+      <p>Download the current public record for GIS, spreadsheets, and reproducible reporting.</p>
+      <div class="export-row">
+        <a class="button ghost" href="/api/report.geojson">GeoJSON</a>
+        <a class="button ghost" href="/api/report.csv">CSV</a>
+        <a class="button ghost" href="/api/report.json">JSON</a>
+      </div>
+    </article>
+    <article class="dashboard-card">
+      <h2>Top themes</h2>
+      <div class="result-list" id="staffThemes"></div>
+    </article>
+    <article class="dashboard-card">
+      <h2>Quick poll</h2>
+      <div class="result-list" id="staffPollResults"></div>
+    </article>
+    <article class="dashboard-card wide-card">
+      <h2>Planner mode draft</h2>
+      <p id="plannerDraft">Loading a draft summary...</p>
+    </article>
+    <article class="dashboard-card">
+      <h2>Recent map comments</h2>
+      <div class="staff-list" id="staffPins"></div>
+    </article>
+    <article class="dashboard-card">
+      <h2>Recent conversation</h2>
+      <div class="staff-list" id="staffDiscussionList"></div>
+    </article>
+  </section>
+</main>
+<script>
+async function api(path) {
+  const response = await fetch(path);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Request failed.');
+  return data;
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]));
+}
+
+function resultRows(results) {
+  const entries = Object.entries(results || {});
+  const total = entries.reduce((sum, entry) => sum + entry[1], 0);
+  return entries.map(([label, count]) => {
+    const pct = total ? Math.round((count / total) * 100) : 0;
+    return `<div class="result-row">
+      <div class="result-meta"><span>${escapeHtml(label)}</span><span>${count}</span></div>
+      <div class="result-bar"><span style="width:${pct}%"></span></div>
+    </div>`;
+  }).join('') || '<div class="staff-item"><strong>No responses yet</strong><span>Results will appear as people participate.</span></div>';
+}
+
+function plannerLanguage(insights, counts) {
+  if (!insights.total) {
+    return 'No public comments have been submitted yet. Once input is received, this section will draft ATP/RTP-ready language that summarizes key needs, geography, and recommended follow-up actions.';
+  }
+  const themes = (insights.themes || []).map((item) => item.theme).slice(0, 3).join(', ') || 'bike safety';
+  const action = (insights.recommended_actions || [])[0] || 'review mapped comments and group nearby issues into project-ready needs statements';
+  return `Community input for Bike Better San Diego includes ${counts.map || insights.total} mapped comments, ${counts.survey || 0} survey responses, and ${counts.discussion || 0} conversation posts. Initial analysis points to ${themes}. Recommended next step: ${action}`;
+}
+
+async function loadStaffDashboard() {
+  const [project, insights, report, poll, discussion] = await Promise.all([
+    api('/api/project'),
+    api('/api/insights'),
+    api('/api/report.json'),
+    api('/api/poll'),
+    api('/api/discussion')
+  ]);
+  const counts = project.counts || {};
+  document.getElementById('staffMap').textContent = counts.map || 0;
+  document.getElementById('staffSurvey').textContent = counts.survey || 0;
+  document.getElementById('staffPoll').textContent = counts.poll || 0;
+  document.getElementById('staffDiscussion').textContent = counts.discussion || 0;
+  document.getElementById('staffInsightSource').textContent = insights.generated_by === 'ai' ? 'AI-powered insights' : 'Live reporting';
+  document.getElementById('staffSummary').textContent = insights.summary || 'No insight summary available yet.';
+  document.getElementById('staffNegative').textContent = insights.sentiment?.negative || 0;
+  document.getElementById('staffMixed').textContent = insights.sentiment?.mixed || 0;
+  document.getElementById('staffPositive').textContent = insights.sentiment?.positive || 0;
+  document.getElementById('staffActions').innerHTML = (insights.recommended_actions || []).map((item) => `
+    <div class="staff-item"><strong>Recommended action</strong><span>${escapeHtml(item)}</span></div>
+  `).join('') || '<div class="staff-item"><strong>No actions yet</strong><span>Actions will appear after public comments are submitted.</span></div>';
+  document.getElementById('staffThemes').innerHTML = (insights.themes || []).map((item) => `
+    <div class="result-row">
+      <div class="result-meta"><span>${escapeHtml(item.theme)}</span><span>${item.mentions || 0} signals</span></div>
+      <div class="result-bar"><span style="width:${Math.min(100, (item.mentions || 0) * 20)}%"></span></div>
+    </div>
+  `).join('') || '<div class="staff-item"><strong>No themes yet</strong><span>Theme extraction starts when mapped comments exist.</span></div>';
+  document.getElementById('staffPollResults').innerHTML = resultRows(poll.results);
+  document.getElementById('plannerDraft').textContent = plannerLanguage(insights, counts);
+  document.getElementById('staffPins').innerHTML = (report.pins || []).slice(0, 8).map((pin) => `
+    <div class="staff-item"><strong>${escapeHtml(pin.title || pin.category)}</strong><span>${escapeHtml(pin.category)} at ${Number(pin.lat).toFixed(4)}, ${Number(pin.lng).toFixed(4)}</span></div>
+  `).join('') || '<div class="staff-item"><strong>No mapped comments yet</strong><span>Recent map input will appear here.</span></div>';
+  document.getElementById('staffDiscussionList').innerHTML = (discussion.posts || []).slice(0, 8).map((post) => `
+    <div class="staff-item"><strong>${escapeHtml(post.title)}</strong><span>${escapeHtml(post.comment)}</span></div>
+  `).join('') || '<div class="staff-item"><strong>No conversation posts yet</strong><span>Discussion activity will appear here.</span></div>';
+}
+
+loadStaffDashboard().catch(() => {
+  document.getElementById('staffSummary').textContent = 'Dashboard data is temporarily unavailable.';
+});
+</script>"""
+    return _layout("Bike Better San Diego Staff Dashboard", body)
+
+
 def app(environ, start_response):
     path = environ.get("PATH_INFO", "/")
     query = parse_qs(environ.get("QUERY_STRING", ""))
@@ -1524,6 +1897,8 @@ def app(environ, start_response):
         return _api_responses(environ, start_response, path)
     if path == "/api/report.json":
         return _api_report(start_response, "json")
+    if path == "/api/report.geojson":
+        return _api_report(start_response, "geojson")
     if path == "/api/report.csv":
         return _api_report(start_response, "csv")
     if path == "/api/pins" or path.startswith("/api/pins/"):
@@ -1536,6 +1911,8 @@ def app(environ, start_response):
         return _file_response(start_response, BASE_DIR / "survey" / "assets" / "img" / "demo" / "sd-bike-bus.webp")
     if path in ("/survey", "/survey/"):
         return _response(start_response, "200 OK", _survey())
+    if path in ("/staff", "/staff/"):
+        return _response(start_response, "200 OK", _staff())
     if path == "/healthz":
         return _response(start_response, "200 OK", "ok", "text/plain; charset=utf-8")
     if path == "/" or "x-vercel-set-bypass-cookie" in query:
