@@ -21,8 +21,150 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY", "")
 AI_GATEWAY_API_KEY = os.environ.get("AI_GATEWAY_API_KEY", "")
 AI_GATEWAY_MODEL = os.environ.get("AI_GATEWAY_MODEL", "openai/gpt-5.2")
+DEMO_ADMIN_TOKEN = os.environ.get("DEMO_ADMIN_TOKEN", "")
 PIN_COLUMNS = "id,created_at,category,title,note,lng,lat,photo_data_url,status"
 PROJECT_SLUG = "bike-better-san-diego"
+SAMPLE_CLIENT_ID = "sample-seed"
+SAMPLE_PINS = [
+    {
+        "category": "Dangerous crossing",
+        "title": "Fast turns at 30th and University",
+        "note": "Drivers turn quickly across the bike lane and people biking have very little protected waiting space. A leading bike interval or hardened corner would help.",
+        "lng": -117.1309,
+        "lat": 32.7484,
+    },
+    {
+        "category": "Missing bike connection",
+        "title": "Gap between Balboa Park and downtown",
+        "note": "The route feels comfortable inside the park, then becomes stressful near freeway ramps and downtown crossings. A continuous low-stress connection is needed.",
+        "lng": -117.1598,
+        "lat": 32.7259,
+    },
+    {
+        "category": "Maintenance problem",
+        "title": "Debris in Rose Canyon bike lane",
+        "note": "Glass and sand collect in the shoulder after rain. Regular sweeping would make this important north-south route usable for commuters.",
+        "lng": -117.2165,
+        "lat": 32.8537,
+    },
+    {
+        "category": "Dangerous crossing",
+        "title": "I-5 ramp conflict near Old Town",
+        "note": "High-speed ramp traffic creates a scary crossing for riders heading toward Mission Bay. The crossing needs clearer priority and slower turning speeds.",
+        "lng": -117.1966,
+        "lat": 32.7556,
+    },
+    {
+        "category": "School route",
+        "title": "Families need safer access to Chula Vista schools",
+        "note": "Parents report avoiding bike trips because crossings near the school feel exposed during pickup and drop-off. Protected approaches would help families ride.",
+        "lng": -117.0842,
+        "lat": 32.6401,
+    },
+    {
+        "category": "Missing bike connection",
+        "title": "El Cajon Boulevard gap",
+        "note": "This corridor has destinations people want to reach, but bike facilities disappear at key blocks. Add a connected bikeway or parallel neighborhood route.",
+        "lng": -117.1032,
+        "lat": 32.7552,
+    },
+    {
+        "category": "Bike parking need",
+        "title": "Secure parking near trolley station",
+        "note": "People would combine biking and transit more often if there were secure bike lockers and visible racks near the station entrance.",
+        "lng": -117.1467,
+        "lat": 32.7169,
+    },
+    {
+        "category": "Dangerous crossing",
+        "title": "Coast Highway crossing in Encinitas",
+        "note": "Beach traffic and turning vehicles make this crossing stressful for families. Better daylighting and protected intersection design would help.",
+        "lng": -117.2921,
+        "lat": 33.0474,
+    },
+    {
+        "category": "Maintenance problem",
+        "title": "Pavement seam on Bayshore Bikeway",
+        "note": "A rough seam catches narrow tires near the curve. This is a high-use regional route and should be prioritized for repair.",
+        "lng": -117.1136,
+        "lat": 32.6187,
+    },
+    {
+        "category": "Near miss",
+        "title": "Close passes on Mira Mesa Boulevard",
+        "note": "Riders report close passes from high-speed traffic. A painted lane is not enough here; the corridor needs physical separation.",
+        "lng": -117.1455,
+        "lat": 32.9121,
+    },
+    {
+        "category": "School route",
+        "title": "Safer route to Oceanside schools",
+        "note": "Students riding from nearby neighborhoods need protected crossings and slower speeds near school entrances.",
+        "lng": -117.3795,
+        "lat": 33.1959,
+    },
+    {
+        "category": "Missing bike connection",
+        "title": "Santee river trail access gap",
+        "note": "The trail is useful, but getting to it from nearby homes requires uncomfortable arterial riding. Add a signed and protected access route.",
+        "lng": -116.9842,
+        "lat": 32.8384,
+    },
+    {
+        "category": "Dangerous crossing",
+        "title": "La Mesa village crossing",
+        "note": "People biking to shops have to negotiate angled parking and unpredictable turns. A calmer intersection treatment would support local trips.",
+        "lng": -117.0207,
+        "lat": 32.7679,
+    },
+    {
+        "category": "Bike parking need",
+        "title": "More racks near North Park businesses",
+        "note": "Bike parking fills up on busy evenings. More corrals would support local businesses and reduce sidewalk clutter.",
+        "lng": -117.1292,
+        "lat": 32.7478,
+    },
+    {
+        "category": "Maintenance problem",
+        "title": "Flooding under SR-56 path",
+        "note": "Standing water blocks the path after storms and forces riders into traffic. Drainage and detour signage are needed.",
+        "lng": -117.1641,
+        "lat": 32.9633,
+    },
+    {
+        "category": "Near miss",
+        "title": "Dooring risk near beach parking",
+        "note": "The bike lane runs directly beside parked cars with heavy turnover. A parking-protected lane would reduce dooring risk.",
+        "lng": -117.2549,
+        "lat": 32.8025,
+    },
+]
+
+SAMPLE_RESPONSES = [
+    ("poll", "quick-priority-poll", {"choice": "Protected bike lanes"}),
+    ("poll", "quick-priority-poll", {"choice": "Safer crossings"}),
+    ("poll", "quick-priority-poll", {"choice": "Safer crossings"}),
+    ("poll", "quick-priority-poll", {"choice": "Maintenance fixes"}),
+    ("poll", "quick-priority-poll", {"choice": "School routes"}),
+    ("survey", "rider-priorities", {
+        "priority": "Connect schools, transit stops, and main street business districts with protected bikeways.",
+        "affected_groups": "Students, families, workers without cars, and new riders.",
+        "email": "",
+    }),
+    ("survey", "rider-priorities", {
+        "priority": "Focus first on intersections where riders have reported close calls and fast turning traffic.",
+        "affected_groups": "Older adults, e-bike commuters, and parents riding with children.",
+        "email": "",
+    }),
+    ("discussion", "public-discussion", {
+        "title": "Report back matters",
+        "comment": "Please show which comments become grant applications or project requests so people know their input changed something.",
+    }),
+    ("discussion", "public-discussion", {
+        "title": "Coordinate with schools",
+        "comment": "Safe Routes to School partners should be part of the next review because many of these gaps affect students.",
+    }),
+]
 
 
 def _response(start_response, status, body, content_type="text/html; charset=utf-8"):
@@ -521,6 +663,71 @@ def _api_report(start_response, fmt):
         return _json_response(start_response, "502 Bad Gateway", {"error": "The report database is temporarily unavailable."})
 
 
+def _authorized_demo_request(environ):
+    if not DEMO_ADMIN_TOKEN:
+        return False
+    query = parse_qs(environ.get("QUERY_STRING", ""))
+    supplied = environ.get("HTTP_X_DEMO_TOKEN") or query.get("token", [""])[0]
+    return supplied == DEMO_ADMIN_TOKEN
+
+
+def _reset_sample_data(project_id):
+    _supabase_request("PATCH", "sdbike_engagement_pins?source=eq.sdbike-sample", {"status": "removed"})
+    _supabase_request(
+        "PATCH",
+        f"engagement_responses?project_id=eq.{project_id}&client_id=eq.{SAMPLE_CLIENT_ID}",
+        {"status": "removed"},
+    )
+
+
+def _api_demo_data(environ, start_response, action):
+    if environ.get("REQUEST_METHOD", "GET").upper() != "POST":
+        return _json_response(start_response, "405 Method Not Allowed", {"error": "Use POST for demo data operations."})
+    if not _authorized_demo_request(environ):
+        return _json_response(start_response, "403 Forbidden", {"error": "Demo data operations require an admin token."})
+    try:
+        project = _project_record()
+        tools = _tool_records(project["id"])
+        _reset_sample_data(project["id"])
+        if action == "reset":
+            _audit(project["id"], "sample_data_reset", "project", project["id"])
+            return _json_response(start_response, "200 OK", {"ok": True, "pins": 0, "responses": 0})
+
+        pin_rows = [
+            {
+                **pin,
+                "client_id": SAMPLE_CLIENT_ID,
+                "source": "sdbike-sample",
+                "status": "active",
+            }
+            for pin in SAMPLE_PINS
+        ]
+        inserted_pins = _supabase_request("POST", "sdbike_engagement_pins", pin_rows) or []
+        response_rows = []
+        for tool_type, slug, payload in SAMPLE_RESPONSES:
+            tool = _tool_by_slug(tools, slug)
+            response_rows.append({
+                "project_id": project["id"],
+                "tool_id": tool.get("id") if tool else None,
+                "tool_type": tool_type,
+                "client_id": SAMPLE_CLIENT_ID,
+                "payload": {**payload, "sample": True},
+                "status": "active",
+            })
+        inserted_responses = _supabase_request("POST", "engagement_responses", response_rows) or []
+        _audit(project["id"], "sample_data_loaded", "project", project["id"], {
+            "pins": len(inserted_pins),
+            "responses": len(inserted_responses),
+        })
+        return _json_response(start_response, "200 OK", {
+            "ok": True,
+            "pins": len(inserted_pins),
+            "responses": len(inserted_responses),
+        })
+    except RuntimeError:
+        return _json_response(start_response, "502 Bad Gateway", {"error": "The engagement database is temporarily unavailable."})
+
+
 def _file_response(start_response, path):
     if not path.exists() or not path.is_file():
         return _response(start_response, "404 Not Found", "Not found", "text/plain; charset=utf-8")
@@ -800,6 +1007,17 @@ def _layout(title, body):
     .staff-item strong {{ display: block; margin-bottom: 4px; }}
     .staff-item span {{ display: block; color: var(--muted); line-height: 1.4; }}
     .export-row {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }}
+    .report-page {{ padding: 34px clamp(18px, 5vw, 72px); }}
+    .report-section {{ border-top: 1px solid var(--line); padding: 22px 0; }}
+    .report-section h2 {{ margin: 0 0 10px; font-size: 28px; }}
+    .report-map {{ min-height: 320px; border: 1px solid var(--line); border-radius: 8px; background: #d9e9e4; position: relative; overflow: hidden; }}
+    .report-dot {{ position: absolute; width: 10px; height: 10px; border-radius: 50%; background: #d93636; border: 2px solid white; transform: translate(-50%, -50%); }}
+    @media print {{
+      .nav, .export-row .button {{ display: none; }}
+      body {{ background: white; }}
+      .report-page {{ padding: 0; }}
+      .dashboard-card, .metric, .staff-item {{ break-inside: avoid; }}
+    }}
     @media (max-width: 780px) {{
       .hero, .workspace {{ grid-template-columns: 1fr; }}
       .hero {{ min-height: auto; }}
@@ -1744,6 +1962,7 @@ def _staff():
   <div class="brand">Bike Better San Diego</div>
   <div class="actions">
     <a href="/survey">Public tools</a>
+    <a href="/report">Report</a>
     <a href="/">Overview</a>
   </div>
 </nav>
@@ -1775,10 +1994,20 @@ def _staff():
       <h2>Exports</h2>
       <p>Download the current public record for GIS, spreadsheets, and reproducible reporting.</p>
       <div class="export-row">
+        <a class="button ghost" href="/report">Printable report</a>
         <a class="button ghost" href="/api/report.geojson">GeoJSON</a>
         <a class="button ghost" href="/api/report.csv">CSV</a>
         <a class="button ghost" href="/api/report.json">JSON</a>
       </div>
+      <div class="field">
+        <label for="demoToken">Demo admin token</label>
+        <input id="demoToken" type="text" placeholder="Required to load or reset sample data">
+      </div>
+      <div class="export-row">
+        <button class="small-button" type="button" data-demo-action="seed">Load sample data</button>
+        <button class="small-button danger" type="button" data-demo-action="reset">Reset sample data</button>
+      </div>
+      <p class="message" id="demoMessage"></p>
     </article>
     <article class="dashboard-card">
       <h2>Top themes</h2>
@@ -1808,6 +2037,27 @@ async function api(path) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || 'Request failed.');
   return data;
+}
+
+async function postDemoData(action) {
+  const token = document.getElementById('demoToken').value.trim();
+  if (!token) {
+    document.getElementById('demoMessage').textContent = 'Enter the demo admin token first.';
+    return;
+  }
+  const response = await fetch(`/api/demo/${action}`, {
+    method: 'POST',
+    headers: { 'x-demo-token': token }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    document.getElementById('demoMessage').textContent = data.error || 'Demo data operation failed.';
+    return;
+  }
+  document.getElementById('demoMessage').textContent = action === 'seed'
+    ? `Loaded ${data.pins} sample pins and ${data.responses} sample responses.`
+    : 'Sample data reset.';
+  loadStaffDashboard();
 }
 
 function escapeHtml(value) {
@@ -1881,8 +2131,136 @@ async function loadStaffDashboard() {
 loadStaffDashboard().catch(() => {
   document.getElementById('staffSummary').textContent = 'Dashboard data is temporarily unavailable.';
 });
+
+document.querySelectorAll('[data-demo-action]').forEach((button) => {
+  button.addEventListener('click', () => postDemoData(button.dataset.demoAction));
+});
 </script>"""
     return _layout("Bike Better San Diego Staff Dashboard", body)
+
+
+def _report_page():
+    body = """
+<nav class="nav">
+  <div class="brand">Bike Better San Diego</div>
+  <div class="actions">
+    <a href="/staff">Staff dashboard</a>
+    <a href="/survey">Public tools</a>
+  </div>
+</nav>
+<main class="report-page">
+  <section class="dashboard-head">
+    <div class="eyebrow">Printable engagement report</div>
+    <h1>Bike Better San Diego: What We Heard</h1>
+    <p class="lead" id="reportLead">Loading report summary...</p>
+    <div class="export-row">
+      <button class="button" type="button" onclick="window.print()">Print or save PDF</button>
+      <a class="button ghost" href="/api/report.geojson">GeoJSON</a>
+      <a class="button ghost" href="/api/report.csv">CSV</a>
+    </div>
+  </section>
+  <section class="metrics" aria-label="Report totals">
+    <div class="metric"><strong id="reportMap">0</strong><span>map comments</span></div>
+    <div class="metric"><strong id="reportSurvey">0</strong><span>survey responses</span></div>
+    <div class="metric"><strong id="reportPoll">0</strong><span>poll votes</span></div>
+    <div class="metric"><strong id="reportDiscussion">0</strong><span>conversation posts</span></div>
+  </section>
+  <section class="report-section">
+    <h2>Map Snapshot</h2>
+    <p>Mapped comments show where riders experience unsafe crossings, missing links, maintenance barriers, school-route gaps, and bike parking needs.</p>
+    <div class="report-map" id="reportMapPreview" aria-label="Static map preview of comments"></div>
+  </section>
+  <section class="report-section">
+    <h2>Key Themes</h2>
+    <div class="result-list" id="reportThemes"></div>
+  </section>
+  <section class="report-section">
+    <h2>Recommended Actions</h2>
+    <div class="staff-list" id="reportActions"></div>
+  </section>
+  <section class="report-section">
+    <h2>Planner Mode Draft</h2>
+    <p id="reportPlanner">Loading draft language...</p>
+  </section>
+  <section class="report-section">
+    <h2>Appendix: Recent Comments</h2>
+    <div class="staff-list" id="reportPins"></div>
+  </section>
+</main>
+<script>
+async function api(path) {
+  const response = await fetch(path);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Request failed.');
+  return data;
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]));
+}
+
+function plannerLanguage(insights, counts) {
+  if (!insights.total) {
+    return 'No public comments have been submitted yet. This report will update as residents add mapped comments, poll responses, survey feedback, and conversation posts.';
+  }
+  const themes = (insights.themes || []).map((item) => item.theme).slice(0, 3).join(', ') || 'bike safety';
+  const action = (insights.recommended_actions || [])[0] || 'group nearby comments into project-ready problem statements';
+  return `Community input includes ${counts.map || insights.total} mapped comments, ${counts.survey || 0} survey responses, ${counts.poll || 0} poll votes, and ${counts.discussion || 0} conversation posts. The strongest recurring themes are ${themes}. Recommended next step: ${action}`;
+}
+
+function renderMapPreview(pins) {
+  const node = document.getElementById('reportMapPreview');
+  if (!pins.length) {
+    node.innerHTML = '<div class="map-note">No mapped comments yet.</div>';
+    return;
+  }
+  const minLng = -117.45, maxLng = -116.85, minLat = 32.55, maxLat = 33.25;
+  node.innerHTML = pins.map((pin) => {
+    const x = Math.max(3, Math.min(97, ((pin.lng - minLng) / (maxLng - minLng)) * 100));
+    const y = Math.max(3, Math.min(97, (1 - ((pin.lat - minLat) / (maxLat - minLat))) * 100));
+    return `<span class="report-dot" title="${escapeHtml(pin.title)}" style="left:${x}%;top:${y}%"></span>`;
+  }).join('') + '<div class="map-note">Static preview for print. Use GeoJSON for GIS analysis.</div>';
+}
+
+async function loadReport() {
+  const [project, insights, report] = await Promise.all([
+    api('/api/project'),
+    api('/api/insights'),
+    api('/api/report.json')
+  ]);
+  const counts = project.counts || {};
+  document.getElementById('reportMap').textContent = counts.map || 0;
+  document.getElementById('reportSurvey').textContent = counts.survey || 0;
+  document.getElementById('reportPoll').textContent = counts.poll || 0;
+  document.getElementById('reportDiscussion').textContent = counts.discussion || 0;
+  document.getElementById('reportLead').textContent = insights.summary || 'Engagement summary will appear as public input is collected.';
+  document.getElementById('reportThemes').innerHTML = (insights.themes || []).map((item) => `
+    <div class="result-row">
+      <div class="result-meta"><span>${escapeHtml(item.theme)}</span><span>${item.mentions || 0} signals</span></div>
+      <div class="result-bar"><span style="width:${Math.min(100, (item.mentions || 0) * 20)}%"></span></div>
+    </div>
+  `).join('') || '<div class="staff-item"><strong>No themes yet</strong><span>Theme extraction starts when public comments are available.</span></div>';
+  document.getElementById('reportActions').innerHTML = (insights.recommended_actions || []).map((item) => `
+    <div class="staff-item"><strong>Recommended action</strong><span>${escapeHtml(item)}</span></div>
+  `).join('');
+  document.getElementById('reportPlanner').textContent = plannerLanguage(insights, counts);
+  document.getElementById('reportPins').innerHTML = (report.pins || []).slice(0, 20).map((pin) => `
+    <div class="staff-item"><strong>${escapeHtml(pin.title || pin.category)}</strong><span>${escapeHtml(pin.category)}: ${escapeHtml(pin.note)}</span></div>
+  `).join('') || '<div class="staff-item"><strong>No comments yet</strong><span>Recent comments will appear here.</span></div>';
+  renderMapPreview(report.pins || []);
+}
+
+loadReport().catch(() => {
+  document.getElementById('reportLead').textContent = 'Report data is temporarily unavailable.';
+});
+</script>"""
+    return _layout("Bike Better San Diego Printable Report", body)
 
 
 def app(environ, start_response):
@@ -1901,6 +2279,10 @@ def app(environ, start_response):
         return _api_report(start_response, "geojson")
     if path == "/api/report.csv":
         return _api_report(start_response, "csv")
+    if path == "/api/demo/seed":
+        return _api_demo_data(environ, start_response, "seed")
+    if path == "/api/demo/reset":
+        return _api_demo_data(environ, start_response, "reset")
     if path == "/api/pins" or path.startswith("/api/pins/"):
         return _api_pins(environ, start_response, path)
     if path == "/favicon.ico":
@@ -1913,6 +2295,8 @@ def app(environ, start_response):
         return _response(start_response, "200 OK", _survey())
     if path in ("/staff", "/staff/"):
         return _response(start_response, "200 OK", _staff())
+    if path in ("/report", "/report/"):
+        return _response(start_response, "200 OK", _report_page())
     if path == "/healthz":
         return _response(start_response, "200 OK", "ok", "text/plain; charset=utf-8")
     if path == "/" or "x-vercel-set-bypass-cookie" in query:
