@@ -22,6 +22,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SU
 AI_GATEWAY_API_KEY = os.environ.get("AI_GATEWAY_API_KEY", "")
 AI_GATEWAY_MODEL = os.environ.get("AI_GATEWAY_MODEL", "openai/gpt-5.2")
 PIN_COLUMNS = "id,created_at,category,title,note,lng,lat,photo_data_url,status"
+PROJECT_SLUG = "bike-better-san-diego"
 
 
 def _response(start_response, status, body, content_type="text/html; charset=utf-8"):
@@ -130,6 +131,41 @@ def _public_pin(pin):
         "lat": pin.get("lat"),
         "photo": pin.get("photo_data_url") or "",
     }
+
+
+def _project_record():
+    rows = _supabase_request(
+        "GET",
+        f"engagement_projects?slug=eq.{PROJECT_SLUG}&select=id,slug,title,organization,description,status,starts_at,ends_at",
+    ) or []
+    if rows:
+        return rows[0]
+    raise RuntimeError("Project is not configured.")
+
+
+def _tool_records(project_id):
+    rows = _supabase_request(
+        "GET",
+        f"engagement_tools?project_id=eq.{project_id}&is_active=eq.true&select=id,slug,tool_type,title,config&order=created_at.asc",
+    ) or []
+    return rows
+
+
+def _tool_by_slug(tools, slug):
+    return next((tool for tool in tools if tool.get("slug") == slug), None)
+
+
+def _audit(project_id, event_type, entity_type, entity_id=None, metadata=None):
+    try:
+        _supabase_request("POST", "engagement_audit_events", {
+            "project_id": project_id,
+            "event_type": event_type,
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "metadata": metadata or {},
+        })
+    except RuntimeError:
+        pass
 
 
 def _sentiment_for_text(text):
@@ -325,6 +361,138 @@ def _api_pins(environ, start_response, path):
         return _json_response(start_response, "502 Bad Gateway", {"error": "The engagement database is temporarily unavailable."})
 
 
+def _api_project(start_response):
+    try:
+        project = _project_record()
+        tools = _tool_records(project["id"])
+        decisions = _supabase_request(
+            "GET",
+            f"engagement_decisions?project_id=eq.{project['id']}&select=id,title,description,source_summary,status,created_at&order=created_at.desc&limit=10",
+        ) or []
+        responses = _supabase_request(
+            "GET",
+            f"engagement_responses?project_id=eq.{project['id']}&status=eq.active&select=tool_type,payload,created_at&order=created_at.desc&limit=500",
+        ) or []
+        return _json_response(start_response, "200 OK", {
+            "project": project,
+            "tools": tools,
+            "decisions": decisions,
+            "counts": {
+                "map": len(_supabase_request("GET", f"sdbike_engagement_pins?select=id&status=eq.active&limit=1000") or []),
+                "survey": sum(1 for row in responses if row.get("tool_type") == "survey"),
+                "poll": sum(1 for row in responses if row.get("tool_type") == "poll"),
+                "discussion": sum(1 for row in responses if row.get("tool_type") == "discussion"),
+            },
+        })
+    except RuntimeError:
+        return _json_response(start_response, "502 Bad Gateway", {"error": "The project database is temporarily unavailable."})
+
+
+def _api_responses(environ, start_response, path):
+    method = environ.get("REQUEST_METHOD", "GET").upper()
+    try:
+        project = _project_record()
+        tools = _tool_records(project["id"])
+
+        if path == "/api/poll" and method == "GET":
+            rows = _supabase_request(
+                "GET",
+                f"engagement_responses?project_id=eq.{project['id']}&tool_type=eq.poll&status=eq.active&select=payload&limit=2000",
+            ) or []
+            counts = {}
+            for row in rows:
+                choice = (row.get("payload") or {}).get("choice") or "Unspecified"
+                counts[choice] = counts.get(choice, 0) + 1
+            return _json_response(start_response, "200 OK", {"results": counts, "total": sum(counts.values())})
+
+        if path == "/api/discussion" and method == "GET":
+            rows = _supabase_request(
+                "GET",
+                f"engagement_responses?project_id=eq.{project['id']}&tool_type=eq.discussion&status=eq.active&select=id,payload,created_at&order=created_at.desc&limit=20",
+            ) or []
+            posts = [
+                {
+                    "id": row.get("id"),
+                    "created_at": row.get("created_at"),
+                    "title": (row.get("payload") or {}).get("title") or "Community comment",
+                    "comment": (row.get("payload") or {}).get("comment") or "",
+                }
+                for row in rows
+            ]
+            return _json_response(start_response, "200 OK", {"posts": posts})
+
+        if path in ("/api/poll", "/api/survey", "/api/discussion") and method == "POST":
+            payload = _read_json(environ)
+            client_id = _clean_text(payload.get("client_id"), 80)
+            if not client_id:
+                return _json_response(start_response, "400 Bad Request", {"error": "A contributor id is required."})
+
+            if path == "/api/poll":
+                tool_type, slug = "poll", "quick-priority-poll"
+                body = {"choice": _clean_text(payload.get("choice"), 120)}
+                if not body["choice"]:
+                    return _json_response(start_response, "400 Bad Request", {"error": "Choose an option before voting."})
+            elif path == "/api/survey":
+                tool_type, slug = "survey", "rider-priorities"
+                body = {
+                    "priority": _clean_text(payload.get("priority"), 400),
+                    "affected_groups": _clean_text(payload.get("affected_groups"), 400),
+                    "email": _clean_text(payload.get("email"), 160),
+                }
+                if not body["priority"]:
+                    return _json_response(start_response, "400 Bad Request", {"error": "Add a project priority before submitting."})
+            else:
+                tool_type, slug = "discussion", "public-discussion"
+                body = {
+                    "title": _clean_text(payload.get("title"), 160),
+                    "comment": _clean_text(payload.get("comment"), 1000),
+                }
+                if not body["comment"]:
+                    return _json_response(start_response, "400 Bad Request", {"error": "Add a comment before posting."})
+
+            tool = _tool_by_slug(tools, slug)
+            rows = _supabase_request("POST", "engagement_responses", {
+                "project_id": project["id"],
+                "tool_id": tool.get("id") if tool else None,
+                "tool_type": tool_type,
+                "client_id": client_id,
+                "payload": body,
+            })
+            response_id = (rows or [{}])[0].get("id")
+            _audit(project["id"], f"{tool_type}_submitted", "engagement_response", response_id, {"tool": slug})
+            return _json_response(start_response, "201 Created", {"ok": True, "id": response_id})
+
+        return _json_response(start_response, "405 Method Not Allowed", {"error": "Method not allowed."})
+    except (RuntimeError, json.JSONDecodeError):
+        return _json_response(start_response, "502 Bad Gateway", {"error": "The engagement database is temporarily unavailable."})
+
+
+def _api_report(start_response, fmt):
+    try:
+        rows = _supabase_request(
+            "GET",
+            f"sdbike_engagement_pins?select={PIN_COLUMNS}&status=eq.active&order=created_at.desc&limit=5000",
+        ) or []
+        if fmt == "json":
+            insights = _fallback_insights(rows)
+            return _json_response(start_response, "200 OK", {"pins": [_public_pin(row) for row in rows], "insights": insights})
+        header = ["id", "created_at", "category", "title", "note", "lng", "lat"]
+        lines = [",".join(header)]
+        for row in rows:
+            values = [str(row.get(column, "")).replace('"', '""') for column in header]
+            lines.append(",".join(f'"{value}"' for value in values))
+        payload = "\n".join(lines).encode("utf-8")
+        start_response("200 OK", [
+            ("Content-Type", "text/csv; charset=utf-8"),
+            ("Content-Length", str(len(payload))),
+            ("Cache-Control", "no-store"),
+            ("Content-Disposition", 'attachment; filename="bike-better-san-diego-map-comments.csv"'),
+        ])
+        return [payload]
+    except RuntimeError:
+        return _json_response(start_response, "502 Bad Gateway", {"error": "The report database is temporarily unavailable."})
+
+
 def _file_response(start_response, path):
     if not path.exists() or not path.is_file():
         return _response(start_response, "404 Not Found", "Not found", "text/plain; charset=utf-8")
@@ -483,6 +651,24 @@ def _layout(title, body):
     .insight-list {{ display: grid; gap: 8px; margin: 10px 0; }}
     .insight-item {{ border: 1px solid var(--line); border-radius: 8px; padding: 9px; background: white; font-weight: 700; }}
     .insight-item span {{ display: block; color: var(--muted); font-weight: 600; margin-top: 3px; }}
+    .tool-panel {{ margin-top: 18px; border-top: 1px solid var(--line); padding-top: 16px; }}
+    .tool-panel h2 {{ margin: 0 0 8px; font-size: 22px; line-height: 1.1; }}
+    .tool-panel p {{ color: var(--muted); line-height: 1.4; }}
+    .tool-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 10px 0 14px; }}
+    .tool-stat {{ border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--paper); }}
+    .tool-stat strong {{ display: block; font-size: 22px; }}
+    .poll-options {{ display: grid; gap: 8px; margin: 10px 0; }}
+    .poll-option {{ display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 9px; font-weight: 800; background: white; }}
+    .result-list {{ display: grid; gap: 8px; margin-top: 10px; }}
+    .result-row {{ display: grid; gap: 5px; }}
+    .result-meta {{ display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-weight: 800; font-size: 13px; }}
+    .result-bar {{ height: 8px; border-radius: 8px; background: var(--soft); overflow: hidden; }}
+    .result-bar span {{ display: block; height: 100%; background: var(--green); }}
+    .decision-list, .discussion-list {{ display: grid; gap: 8px; margin-top: 10px; }}
+    .decision-item, .discussion-item {{ border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: white; }}
+    .decision-item strong, .discussion-item strong {{ display: block; margin-bottom: 4px; }}
+    .decision-item span, .discussion-item span {{ display: block; color: var(--muted); line-height: 1.35; }}
+    .message {{ min-height: 20px; color: var(--green); font-weight: 800; }}
     .map-wrap {{ position: relative; min-height: 720px; }}
     #map {{ position: absolute; inset: 0; background: #d9e9e4; }}
     .fallback-map {{
@@ -630,6 +816,71 @@ def _survey():
       </div>
       <div class="insight-list" id="themeList"></div>
       <div class="insight-list" id="actionList"></div>
+    </section>
+    <section class="tool-panel">
+      <span class="status-pill">Project hub</span>
+      <h2 id="projectTitle">Bike Better San Diego</h2>
+      <p id="projectDescription">Map issues, answer the priority poll, and share a short project comment.</p>
+      <div class="tool-grid">
+        <div class="tool-stat"><strong id="countMap">0</strong><span>map comments</span></div>
+        <div class="tool-stat"><strong id="countSurvey">0</strong><span>survey responses</span></div>
+        <div class="tool-stat"><strong id="countPoll">0</strong><span>poll votes</span></div>
+        <div class="tool-stat"><strong id="countDiscussion">0</strong><span>discussion posts</span></div>
+      </div>
+    </section>
+    <section class="tool-panel">
+      <h2>Quick priority poll</h2>
+      <p>What should the Coalition push hardest for first?</p>
+      <div class="poll-options" id="pollOptions">
+        <label class="poll-option"><input type="radio" name="pollChoice" value="Safer crossings">Safer crossings</label>
+        <label class="poll-option"><input type="radio" name="pollChoice" value="Protected bike lanes">Protected bike lanes</label>
+        <label class="poll-option"><input type="radio" name="pollChoice" value="Maintenance fixes">Maintenance fixes</label>
+        <label class="poll-option"><input type="radio" name="pollChoice" value="Bike parking">Bike parking</label>
+        <label class="poll-option"><input type="radio" name="pollChoice" value="School routes">School routes</label>
+      </div>
+      <div class="row"><button class="button" type="button" data-action="submit-poll">Vote</button></div>
+      <p class="message" id="pollMessage"></p>
+      <div class="result-list" id="pollResults"></div>
+    </section>
+    <section class="tool-panel">
+      <h2>Short project survey</h2>
+      <div class="field">
+        <label for="priorityInput">What would make biking better here?</label>
+        <textarea id="priorityInput" maxlength="400" placeholder="Example: Protected lanes on high-speed streets and safer crossings near transit stops."></textarea>
+      </div>
+      <div class="field">
+        <label for="affectedInput">Who is most affected?</label>
+        <textarea id="affectedInput" maxlength="400" placeholder="Example: Students, older adults, workers riding after dark, families, or new riders."></textarea>
+      </div>
+      <div class="field">
+        <label for="emailInput">Email, optional</label>
+        <input id="emailInput" type="text" maxlength="160" placeholder="For follow-up only">
+      </div>
+      <div class="row"><button class="button" type="button" data-action="submit-survey">Submit survey</button></div>
+      <p class="message" id="surveyMessage"></p>
+    </section>
+    <section class="tool-panel">
+      <h2>Conversation</h2>
+      <div class="field">
+        <label for="discussionTitle">Topic, optional</label>
+        <input id="discussionTitle" type="text" maxlength="160" placeholder="Example: North Park school access">
+      </div>
+      <div class="field">
+        <label for="discussionComment">What should decision-makers hear?</label>
+        <textarea id="discussionComment" maxlength="1000" placeholder="Share a question, lived experience, or idea for follow-up."></textarea>
+      </div>
+      <div class="row"><button class="button" type="button" data-action="submit-discussion">Post comment</button></div>
+      <p class="message" id="discussionMessage"></p>
+      <div class="discussion-list" id="discussionList"></div>
+    </section>
+    <section class="tool-panel">
+      <h2>Reporting</h2>
+      <p>Download the current public record and track how input moves toward decisions.</p>
+      <div class="row">
+        <a class="button ghost" href="/api/report.csv">CSV export</a>
+        <a class="button ghost" href="/api/report.json">JSON export</a>
+      </div>
+      <div class="decision-list" id="decisionList"></div>
     </section>
   </aside>
   <section class="map-wrap">
@@ -786,6 +1037,121 @@ async function loadInsights() {
     `).join('');
   } catch (error) {
     document.getElementById('insightSummary').textContent = 'Insights are temporarily unavailable.';
+  }
+}
+
+async function loadProject() {
+  try {
+    const data = await api('/api/project');
+    const project = data.project || {};
+    const counts = data.counts || {};
+    document.getElementById('projectTitle').textContent = project.title || 'Bike Better San Diego';
+    document.getElementById('projectDescription').textContent = project.description || 'Public input is open for this project.';
+    document.getElementById('countMap').textContent = counts.map || 0;
+    document.getElementById('countSurvey').textContent = counts.survey || 0;
+    document.getElementById('countPoll').textContent = counts.poll || 0;
+    document.getElementById('countDiscussion').textContent = counts.discussion || 0;
+    document.getElementById('decisionList').innerHTML = (data.decisions || []).map((item) => `
+      <article class="decision-item">
+        <strong>${escapeHtml(item.title)}</strong>
+        <span>${escapeHtml(item.description || item.source_summary || 'Decision record')}</span>
+      </article>
+    `).join('') || '<article class="decision-item"><strong>No decisions posted yet</strong><span>Outcomes will appear here as the Coalition reports back.</span></article>';
+  } catch (error) {
+    document.getElementById('projectDescription').textContent = 'Project metadata is temporarily unavailable.';
+  }
+}
+
+async function loadPoll() {
+  try {
+    const data = await api('/api/poll');
+    const entries = Object.entries(data.results || {});
+    const total = data.total || 0;
+    document.getElementById('pollResults').innerHTML = entries.map(([label, count]) => {
+      const pct = total ? Math.round((count / total) * 100) : 0;
+      return `<div class="result-row">
+        <div class="result-meta"><span>${escapeHtml(label)}</span><span>${count} votes</span></div>
+        <div class="result-bar"><span style="width:${pct}%"></span></div>
+      </div>`;
+    }).join('') || '<div class="insight-item">No votes yet<span>Results will update after the first vote.</span></div>';
+  } catch (error) {
+    document.getElementById('pollResults').innerHTML = '<div class="insight-item">Poll results are temporarily unavailable.</div>';
+  }
+}
+
+async function loadDiscussion() {
+  try {
+    const data = await api('/api/discussion');
+    document.getElementById('discussionList').innerHTML = (data.posts || []).map((post) => `
+      <article class="discussion-item">
+        <strong>${escapeHtml(post.title)}</strong>
+        <span>${escapeHtml(post.comment)}</span>
+      </article>
+    `).join('') || '<article class="discussion-item"><strong>No conversation posts yet</strong><span>Share the first question, concern, or idea.</span></article>';
+  } catch (error) {
+    document.getElementById('discussionList').innerHTML = '<article class="discussion-item"><strong>Conversation unavailable</strong><span>Try again shortly.</span></article>';
+  }
+}
+
+async function submitPoll() {
+  const choice = document.querySelector('input[name="pollChoice"]:checked')?.value || '';
+  if (!choice) {
+    document.getElementById('pollMessage').textContent = 'Choose an option before voting.';
+    return;
+  }
+  try {
+    await api('/api/poll', { method: 'POST', body: JSON.stringify({ client_id: clientId, choice }) });
+    document.getElementById('pollMessage').textContent = 'Vote recorded.';
+    document.querySelectorAll('input[name="pollChoice"]').forEach((input) => { input.checked = false; });
+    loadPoll();
+    loadProject();
+  } catch (error) {
+    document.getElementById('pollMessage').textContent = error.message;
+  }
+}
+
+async function submitSurvey() {
+  const priority = document.getElementById('priorityInput').value.trim();
+  const affectedGroups = document.getElementById('affectedInput').value.trim();
+  const email = document.getElementById('emailInput').value.trim();
+  if (!priority) {
+    document.getElementById('surveyMessage').textContent = 'Add a project priority before submitting.';
+    return;
+  }
+  try {
+    await api('/api/survey', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: clientId, priority, affected_groups: affectedGroups, email })
+    });
+    document.getElementById('priorityInput').value = '';
+    document.getElementById('affectedInput').value = '';
+    document.getElementById('emailInput').value = '';
+    document.getElementById('surveyMessage').textContent = 'Survey response recorded.';
+    loadProject();
+  } catch (error) {
+    document.getElementById('surveyMessage').textContent = error.message;
+  }
+}
+
+async function submitDiscussion() {
+  const title = document.getElementById('discussionTitle').value.trim();
+  const comment = document.getElementById('discussionComment').value.trim();
+  if (!comment) {
+    document.getElementById('discussionMessage').textContent = 'Add a comment before posting.';
+    return;
+  }
+  try {
+    await api('/api/discussion', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: clientId, title, comment })
+    });
+    document.getElementById('discussionTitle').value = '';
+    document.getElementById('discussionComment').value = '';
+    document.getElementById('discussionMessage').textContent = 'Comment posted.';
+    loadDiscussion();
+    loadProject();
+  } catch (error) {
+    document.getElementById('discussionMessage').textContent = error.message;
   }
 }
 
@@ -953,6 +1319,7 @@ async function removePin(id) {
     renderMarkers();
     renderList();
     loadInsights();
+    loadProject();
     setNote('Pin removed from the project map.');
   } catch (error) {
     setNote(error.message);
@@ -1034,6 +1401,7 @@ async function saveDraft() {
     closeModal({ keepDraftMarker: true });
     renderList();
     loadInsights();
+    loadProject();
     setNote('Concern saved to the project map. Review it, edit it, or add another pin.');
   } catch (error) {
     setNote(error.message);
@@ -1060,6 +1428,9 @@ document.querySelectorAll('[data-action]').forEach((button) => {
     if (action === 'next-review') prepareConfirm();
     if (action === 'back-details') setScreen('details');
     if (action === 'save') saveDraft();
+    if (action === 'submit-poll') submitPoll();
+    if (action === 'submit-survey') submitSurvey();
+    if (action === 'submit-discussion') submitDiscussion();
   });
 });
 
@@ -1134,6 +1505,9 @@ if (token && window.mapboxgl) {
 setNote('Loading public comments...');
 loadPins();
 loadInsights();
+loadProject();
+loadPoll();
+loadDiscussion();
 </script>"""
     return _layout("Bike Better San Diego Survey", body.replace("__MAPBOX_TOKEN__", token_js))
 
@@ -1144,6 +1518,14 @@ def app(environ, start_response):
 
     if path == "/api/insights":
         return _api_insights(start_response)
+    if path == "/api/project":
+        return _api_project(start_response)
+    if path in ("/api/poll", "/api/survey", "/api/discussion"):
+        return _api_responses(environ, start_response, path)
+    if path == "/api/report.json":
+        return _api_report(start_response, "json")
+    if path == "/api/report.csv":
+        return _api_report(start_response, "csv")
     if path == "/api/pins" or path.startswith("/api/pins/"):
         return _api_pins(environ, start_response, path)
     if path == "/favicon.ico":
